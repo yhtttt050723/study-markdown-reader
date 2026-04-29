@@ -1,67 +1,67 @@
 # Study Markdown Reader
 
-一个面向学习场景的本地 Markdown 阅读与编辑工具，支持 `.md` / `.mdc` 文件快速浏览、编辑、保存，以及模板化快速录入。
+A local Markdown reader and editor designed for study workflows, with support for `.md` / `.mdc` browsing, editing, saving, and template-based quick input.
 
-## 功能特性
+## Features
 
-- 打开本地文件夹，自动扫描 `.md` / `.mdc`
-- 左侧按目录分组展示文件树（过滤常见无关目录）
-- 编辑 / 预览 / 分栏三种视图切换
-- 快捷键支持：
-  - `Ctrl + S` 保存
-  - `Ctrl + Z` 撤销
-  - `Ctrl + Y` / `Ctrl + Shift + Z` 重做
-- 快速录入面板（错题 / 日报 / 日清 / 周报）
-- Electron 桌面模式 + 浏览器兼容模式双支持
+- Open a local folder and auto-scan `.md` / `.mdc` files
+- Grouped file tree in the sidebar (filters common noisy folders)
+- Three modes: Edit / Preview / Split view
+- Keyboard shortcuts:
+  - `Ctrl + S` Save
+  - `Ctrl + Z` Undo
+  - `Ctrl + Y` / `Ctrl + Shift + Z` Redo
+- Quick-entry panel (Wrongbook / Daily Report / Day Clear / Weekly Report)
+- Supports both Electron desktop mode and browser-compatible mode
 
-## 技术栈
+## Tech Stack
 
 - Electron
 - React
 - Vite
 - Marked
 
-## 本地运行
+## Run Locally
 
 ```bash
 npm install
 npm run dev
 ```
 
-## 打包（Windows）
+## Build (Windows)
 
 ```bash
 npm run pack:win
 ```
 
-打包输出目录：
+Build outputs:
 
 - `release/Study Markdown Reader 0.0.0.exe`
 - `release/win-unpacked/`
 
-## 项目结构
+## Project Structure
 
 ```text
 md-reader-app/
-├─ electron/            # Electron 主进程与 preload
-├─ src/                 # React 页面
-├─ public/              # 静态资源（含应用图标）
-├─ dist/                # 前端构建产物
+├─ electron/            # Electron main process and preload
+├─ src/                 # React app
+├─ public/              # Static assets (including app icon)
+├─ dist/                # Frontend build output
 └─ package.json
 ```
 
-## 适用场景
+## Use Cases
 
-- 考研/学习资料管理（计划、日报、错题）
-- 本地知识库查看与快速编辑
-- 模板化记录（日常复盘、周报、错题录入）
+- Exam prep / study material management (plans, daily logs, wrongbooks)
+- Local knowledge base reading and quick editing
+- Template-based records (daily review, weekly report, wrongbook entry)
 
-## 后续规划
+## Roadmap
 
-- 搜索（按文件名/内容）
-- 模板可自定义
-- 自动备份与版本快照
-- 深色模式与主题切换
+- Search by filename/content
+- Customizable templates
+- Auto-backup and file snapshots
+- Dark mode and theme switching
 
 ## License
 
