@@ -95,6 +95,26 @@ ipcMain.handle("write-markdown-file", async (_, filePath, content) => {
   return true;
 });
 
+ipcMain.handle("read-local-image-as-data-url", async (_, imagePath) => {
+  if (!imagePath || !fs.existsSync(imagePath)) {
+    return null;
+  }
+  const ext = path.extname(imagePath).toLowerCase();
+  const mimeMap = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+  };
+  const mime = mimeMap[ext];
+  if (!mime) {
+    return null;
+  }
+  const base64 = fs.readFileSync(imagePath).toString("base64");
+  return `data:${mime};base64,${base64}`;
+});
+
 app.whenReady().then(() => {
   createWindow();
   app.on("activate", () => {

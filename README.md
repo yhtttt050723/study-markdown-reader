@@ -12,6 +12,9 @@ A local Markdown reader and editor designed for study workflows, with support fo
   - `Ctrl + Z` Undo
   - `Ctrl + Y` / `Ctrl + Shift + Z` Redo
 - Quick-entry panel (Wrongbook / Daily Report / Day Clear / Weekly Report)
+- Wrongbook entries support image-path linking and inline preview in Preview/Split mode
+- **Random wrong-question drill**: pulls from all `*错题*.md` under the opened folder; shows **first-record date** (`日期` field), **source** (`来源`), and question text/images; **answer sections are hidden** (paper answers)
+- In Preview/Split mode, files whose names contain `错题` automatically **hide answer blocks** in the preview pane
 - Supports both Electron desktop mode and browser-compatible mode
 
 ## Tech Stack
