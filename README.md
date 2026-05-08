@@ -46,9 +46,8 @@ Build outputs:
 
 ```text
 md-reader-app/
-├─ .cursor/rules/       # Cursor：本仓库代码规范 .mdc（改前端/Electron 前必读）
 ├─ electron/            # Electron main process and preload
-├─ src/                 # React app（`markdownQuiz.js` 题库解析、`storageKeys.js` 本地键、`markedConfig.js`）
+├─ src/                 # React app（`markdownQuiz.js` / `storageKeys.js` / `markedConfig.js`）
 ├─ public/              # Static assets (including app icon)
 ├─ dist/                # Frontend build output
 └─ package.json

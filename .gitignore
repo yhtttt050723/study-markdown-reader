@@ -13,6 +13,9 @@ dist-ssr
 release
 *.local
 
+# Cursor（规范 .mdc 仅本地，不上传远端）
+.cursor/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
