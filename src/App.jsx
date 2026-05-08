@@ -1,73 +1,33 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { marked } from "marked";
 import "./App.css";
-
-/** 错题预览 / 随机刷题：不展示答案（纸质版自持） */
-function stripAnswerSectionsForPractice(md) {
-  let s = md || "";
-  s = s.replace(
-    /####\s*正确答案与解析[\s\S]*?(?=\n#### |\n###\s*题目[:：]|$)/gi,
-    ""
-  );
-  s = s.replace(/####\s*答案[\s\S]*?(?=\n#### |\n###\s*题目[:：]|$)/gi, "");
-  s = s.replace(
-    /###\s*正确解法[^\n]*[\s\S]*?(?=\n### |\n#### |\n###\s*题目[:：]|$)/gi,
-    ""
-  );
-  return s.replace(/\n{3,}/g, "\n\n").trim();
-}
-
-function injectLocalQuestionImages(md, imageDataMap) {
-  return (md || "").replace(
-    /- 题目图片：([^\n]+(?:\.png|\.jpg|\.jpeg|\.webp|\.gif))/gi,
-    (_m, p1) => {
-      const rawPath = p1.trim();
-      const dataUrl = imageDataMap[rawPath];
-      const fallbackPath = rawPath.replaceAll("\\", "/");
-      const fallbackUrl = fallbackPath.startsWith("file:///")
-        ? fallbackPath
-        : `file:///${fallbackPath.replace(/^\/+/, "")}`;
-      const displayUrl = dataUrl || fallbackUrl;
-      return `- 题目图片：${rawPath}\n\n![题目截图](${displayUrl})`;
-    }
-  );
-}
-
-function splitWrongBookBlocks(text) {
-  const t = (text || "").replace(/\r\n/g, "\n");
-  const chunks = t.split(/(?=^###\s*题目[:：]|^##\s*题目[:：])/m);
-  return chunks.filter(
-    (c) => /^###\s*题目[:：]/m.test(c) || /^##\s*题目[:：]/m.test(c)
-  );
-}
-
-function parseWrongBlock(block, fileLabel) {
-  const tm =
-    block.match(/^###\s*题目[:：]\s*(.+)$/m) || block.match(/^##\s*题目[:：]\s*(.+)$/m);
-  const dm = block.match(/^-\s*日期[:：]\s*(.+)$/m);
-  const sm = block.match(/^-\s*来源[:：]\s*(.+)$/m);
-  const im = block.match(/^-\s*题目图片[:：]\s*(.+)$/m);
-  const title = tm ? tm[1].trim() : "未命名";
-  const imagePath = im
-    ? im[1].trim().replace(/^["']|["']$/g, "").replaceAll("/", "\\")
-    : "";
-  return {
-    fileLabel,
-    title,
-    firstDate: dm ? dm[1].trim() : "—",
-    source: sm ? sm[1].trim() : "—",
-    imagePath,
-    bodyForQuiz: stripAnswerSectionsForPractice(block),
-  };
-}
-
-function isWrongBookFile(file) {
-  const rp = (file.relativePath || "").replaceAll("\\", "/");
-  if (rp.includes("二刷计划")) return false;
-  if (!file.name?.includes("错题")) return false;
-  if (!/\.md$/i.test(file.name || "")) return false;
-  return true;
-}
+import {
+  LS_SECOND_PLAN_FOCUS,
+  LS_QUIZ_FILE_ONLY,
+  LS_SIDEBAR_W,
+  LS_SPLIT_RATIO,
+  readStoredNumber,
+  tryGetLocalStorage,
+  trySetLocalStorage,
+} from "./storageKeys.js";
+import {
+  appendQuizLog,
+  buildExpandedGroupsSeed,
+  filterQuizPool,
+  formatElapsed,
+  injectLocalQuestionImages,
+  isSecondPassPlanFile,
+  isWrongBookFile,
+  normalizeRelPath,
+  parseSecondPassBlock,
+  parseWrongBlock,
+  QUIZ_SUBJECT_PRESETS,
+  readMarkdownFileText,
+  resolveSecondPlanFocusRel,
+  splitSecondPassBlocks,
+  splitWrongBookBlocks,
+  stripAnswerSectionsForPractice,
+} from "./markdownQuiz.js";
 
 const QUICK_TEMPLATES = {
   wrongbook: {
@@ -179,14 +139,25 @@ function App() {
   const [randomQuizOpen, setRandomQuizOpen] = useState(false);
   const [randomQuizItem, setRandomQuizItem] = useState(null);
   const [randomQuizImageData, setRandomQuizImageData] = useState(null);
-  const wrongBlocksPoolRef = useRef([]);
+  const [quizFullPool, setQuizFullPool] = useState([]);
+  const [quizSelectedFolders, setQuizSelectedFolders] = useState([]);
+  const [quizSelectedSubjects, setQuizSelectedSubjects] = useState([]);
+  const [quizSourceWrong, setQuizSourceWrong] = useState(true);
+  const [quizSourceSecond, setQuizSourceSecond] = useState(true);
+  const [quizSecondPlanFocus, setQuizSecondPlanFocus] = useState("");
+  const [quizFileOnlyMode, setQuizFileOnlyMode] = useState(false);
+  const [quizElapsedSec, setQuizElapsedSec] = useState(0);
+  const quizStartedAtRef = useRef(0);
   const webInputRef = useRef(null);
   const editorRef = useRef(null);
-  marked.setOptions({
-    gfm: true,
-    breaks: true,
-  });
+  const viewerSplitRef = useRef(null);
 
+  const [sidebarWidth, setSidebarWidth] = useState(() =>
+    readStoredNumber(LS_SIDEBAR_W, 320, 200, 720)
+  );
+  const [splitRatio, setSplitRatio] = useState(() =>
+    readStoredNumber(LS_SPLIT_RATIO, 0.5, 0.18, 0.82)
+  );
 
   const hasApi = useMemo(() => Boolean(window.electronAPI), []);
   const canNativeSave = useMemo(
@@ -201,7 +172,7 @@ function App() {
   const groupedFiles = useMemo(() => {
     const groups = {};
     for (const file of files) {
-      const normalized = file.relativePath.replaceAll("\\", "/");
+      const normalized = normalizeRelPath(file.relativePath);
       const group = normalized.includes("/") ? normalized.split("/")[0] : "根目录";
       if (!groups[group]) groups[group] = [];
       groups[group].push(file);
@@ -211,6 +182,80 @@ function App() {
     }
     return groups;
   }, [files]);
+
+  const secondPlanRelPaths = useMemo(() => {
+    return files
+      .filter(isSecondPassPlanFile)
+      .map((f) => normalizeRelPath(f.relativePath))
+      .sort((a, b) => b.localeCompare(a, "zh-CN"));
+  }, [files]);
+
+  const quizFolderOptions = useMemo(() => {
+    const s = new Set(quizFullPool.map((it) => it.folderTag));
+    return [...s].sort((a, b) => a.localeCompare(b, "zh-CN"));
+  }, [quizFullPool]);
+
+  const quizSubjectOptions = useMemo(() => {
+    const fromPool = new Set(
+      quizFullPool
+        .map((it) => (it.subject || "").trim())
+        .filter(Boolean)
+    );
+    QUIZ_SUBJECT_PRESETS.forEach((p) => fromPool.add(p));
+    const rest = [...fromPool].filter((s) => !QUIZ_SUBJECT_PRESETS.includes(s));
+    rest.sort((a, b) => a.localeCompare(b, "zh-CN"));
+    return [...QUIZ_SUBJECT_PRESETS, ...rest];
+  }, [quizFullPool]);
+
+  const quizFilteredPool = useMemo(() => {
+    return filterQuizPool(quizFullPool, {
+      quizSourceWrong,
+      quizSourceSecond,
+      quizSelectedFolders,
+      quizSelectedSubjects,
+      quizSecondPlanFocus,
+      quizFileOnlyMode,
+    });
+  }, [
+    quizFullPool,
+    quizSourceWrong,
+    quizSourceSecond,
+    quizSelectedFolders,
+    quizSelectedSubjects,
+    quizSecondPlanFocus,
+    quizFileOnlyMode,
+  ]);
+
+  useEffect(() => {
+    if (!randomQuizOpen || !randomQuizItem) return;
+    quizStartedAtRef.current = Date.now();
+    setQuizElapsedSec(0);
+    const tick = () =>
+      setQuizElapsedSec(Math.floor((Date.now() - quizStartedAtRef.current) / 1000));
+    const id = window.setInterval(tick, 500);
+    tick();
+    return () => window.clearInterval(id);
+  }, [randomQuizOpen, randomQuizItem?.id]);
+
+  useEffect(() => {
+    if (!randomQuizOpen || !randomQuizItem?.id || !quizFilteredPool.length) return;
+    const still = quizFilteredPool.some((x) => x.id === randomQuizItem.id);
+    if (!still) {
+      setMessage("当前题目不在筛选范围内，请点「换一题」。");
+    }
+  }, [quizFilteredPool, randomQuizItem, randomQuizOpen]);
+
+  useEffect(() => {
+    if (!quizFileOnlyMode || !secondPlanRelPaths.length) return;
+    if (
+      !quizSecondPlanFocus ||
+      !secondPlanRelPaths.includes(quizSecondPlanFocus)
+    ) {
+      const fix = secondPlanRelPaths[0];
+      setQuizSecondPlanFocus(fix);
+      trySetLocalStorage(LS_SECOND_PLAN_FOCUS, fix);
+    }
+  }, [quizFileOnlyMode, quizSecondPlanFocus, secondPlanRelPaths]);
 
   useEffect(() => {
     const loadImages = async () => {
@@ -324,13 +369,7 @@ function App() {
       setFiles(markdownFiles);
       if (markdownFiles.length > 0) {
         await openFile(markdownFiles[0]);
-        const seed = {};
-        for (const f of markdownFiles) {
-          const normalized = f.relativePath.replaceAll("\\", "/");
-          const group = normalized.includes("/") ? normalized.split("/")[0] : "根目录";
-          seed[group] = true;
-        }
-        setExpandedGroups(seed);
+        setExpandedGroups(buildExpandedGroupsSeed(markdownFiles));
       } else {
         setActiveFile(null);
         setContent("");
@@ -347,6 +386,12 @@ function App() {
     setLoading(true);
     setError("");
     setMessage("");
+    if (typeof window.electronAPI?.readMarkdownFile !== "function") {
+      setError("当前环境无法读取文件");
+      setContent("");
+      setLoading(false);
+      return;
+    }
     try {
       const fileContent = await window.electronAPI.readMarkdownFile(file.fullPath);
       setContent(fileContent);
@@ -381,13 +426,7 @@ function App() {
 
     if (markdownFiles.length > 0) {
       await openWebFile(markdownFiles[0].fileObject);
-      const seed = {};
-      for (const f of markdownFiles) {
-        const normalized = f.relativePath.replaceAll("\\", "/");
-        const group = normalized.includes("/") ? normalized.split("/")[0] : "根目录";
-        seed[group] = true;
-      }
-      setExpandedGroups(seed);
+      setExpandedGroups(buildExpandedGroupsSeed(markdownFiles));
     } else {
       setActiveFile(null);
       setContent("");
@@ -448,10 +487,94 @@ function App() {
   };
 
   const pickRandomFromPool = () => {
-    const pool = wrongBlocksPoolRef.current;
-    if (!pool.length) return;
+    const pool = quizFilteredPool;
+    if (!pool.length) {
+      setError(
+        "筛选后无题目：请勾选来源 / 调整文件夹筛选，或开启「文件内刷题」并选择某一 .md。"
+      );
+      return;
+    }
     const item = pool[Math.floor(Math.random() * pool.length)];
     setRandomQuizItem(item);
+  };
+
+  const recordQuizOutcome = (correct) => {
+    if (!randomQuizItem) return;
+    const seconds = Math.max(
+      0,
+      Math.round((Date.now() - quizStartedAtRef.current) / 1000)
+    );
+    appendQuizLog({
+      kind: randomQuizItem.kind,
+      correct,
+      seconds,
+      title: randomQuizItem.title,
+      fileLabel: randomQuizItem.fileLabel,
+      folderTag: randomQuizItem.folderTag,
+      subject: (randomQuizItem.subject || "").trim() || undefined,
+      quizSelectedSubjects,
+      quizFileOnlyMode,
+      secondPlanFocus: quizFileOnlyMode ? quizSecondPlanFocus || undefined : undefined,
+    });
+    setMessage(
+      `已记录：${correct ? "对" : "错"}，用时 ${formatElapsed(seconds)}（已写入本地 smr-quiz-log）`
+    );
+    const pool = quizFilteredPool;
+    if (pool.length <= 1) {
+      setRandomQuizItem(pool[0] || randomQuizItem);
+      quizStartedAtRef.current = Date.now();
+      setQuizElapsedSec(0);
+      return;
+    }
+    let next = pool[Math.floor(Math.random() * pool.length)];
+    let guard = 0;
+    while (next.id === randomQuizItem.id && guard++ < 12) {
+      next = pool[Math.floor(Math.random() * pool.length)];
+    }
+    setRandomQuizItem(next);
+  };
+
+  const toggleQuizFolder = (folder) => {
+    setQuizSelectedFolders((prev) =>
+      prev.includes(folder) ? prev.filter((t) => t !== folder) : [...prev, folder]
+    );
+  };
+
+  const toggleQuizSubject = (subject) => {
+    setQuizSelectedSubjects((prev) =>
+      prev.includes(subject) ? prev.filter((s) => s !== subject) : [...prev, subject]
+    );
+  };
+
+  const onQuizFileOnlyChange = (checked) => {
+    setQuizFileOnlyMode(checked);
+    trySetLocalStorage(LS_QUIZ_FILE_ONLY, checked ? "1" : "0");
+    if (
+      checked &&
+      !quizSecondPlanFocus &&
+      secondPlanRelPaths.length > 0
+    ) {
+      const pick =
+        secondPlanRelPaths.find((rel) =>
+          /\/\d{4}-\d{2}-\d{2}\.md$/i.test(rel)
+        ) || secondPlanRelPaths[0];
+      setQuizSecondPlanFocus(pick);
+      trySetLocalStorage(LS_SECOND_PLAN_FOCUS, pick);
+    }
+    setMessage(
+      checked
+        ? "已开启「文件内刷题」：仅当前所选二刷 .md"
+        : "已关闭「文件内刷题」：按左侧来源 + 文件夹筛选随机抽题"
+    );
+  };
+
+  const onQuizSecondPlanFileChange = (e) => {
+    const v = e.target.value;
+    setQuizSecondPlanFocus(v);
+    trySetLocalStorage(LS_SECOND_PLAN_FOCUS, v);
+    if (quizFileOnlyMode) {
+      setMessage(v ? `文件内刷题：${v}` : "请选择某一二刷 .md");
+    }
   };
 
   const openRandomQuiz = async () => {
@@ -462,35 +585,82 @@ function App() {
       return;
     }
     const wrongFiles = files.filter(isWrongBookFile);
-    if (!wrongFiles.length) {
-      setError("未找到错题本：需要文件名含「错题」的 .md，且不在「二刷计划」目录下");
+    const secondFiles = files.filter(isSecondPassPlanFile);
+    if (!wrongFiles.length && !secondFiles.length) {
+      setError(
+        "未找到题库：需要「文件名含错题的 .md（且不在二刷计划目录）」或「路径含二刷计划的 .md」"
+      );
       return;
     }
     setLoading(true);
     try {
       const blocks = [];
       for (const f of wrongFiles) {
-        let txt = "";
-        if (mode === "electron" && window.electronAPI?.readMarkdownFile) {
-          txt = await window.electronAPI.readMarkdownFile(f.fullPath);
-        } else if (f.fileObject) {
-          txt = await f.fileObject.text();
-        } else {
-          continue;
-        }
-        const rp = f.relativePath.replaceAll("\\", "/");
+        const txt = await readMarkdownFileText(f, mode);
+        if (!txt) continue;
+        const rp = normalizeRelPath(f.relativePath);
         splitWrongBookBlocks(txt).forEach((b) => blocks.push(parseWrongBlock(b, rp)));
       }
+      for (const f of secondFiles) {
+        const txt = await readMarkdownFileText(f, mode);
+        if (!txt) continue;
+        const rp = normalizeRelPath(f.relativePath);
+        splitSecondPassBlocks(txt).forEach((b) =>
+          blocks.push(parseSecondPassBlock(b, rp))
+        );
+      }
       if (!blocks.length) {
-        setError("错题本中未找到「### 题目：」或「## 题目：」格式的条目");
+        setError(
+          "题库为空：错题本需「### 题目：」/「## 题目：」条目；二刷计划需「## 题目 n：」条目"
+        );
         setLoading(false);
         return;
       }
-      wrongBlocksPoolRef.current = blocks;
-      const item = blocks[Math.floor(Math.random() * blocks.length)];
-      setRandomQuizItem(item);
+      let nid = 0;
+      const withIds = blocks.map((b) => ({
+        ...b,
+        id: `q-${nid++}-${b.kind}-${b.fileLabel}-${b.title}`.slice(0, 260),
+      }));
+      const planRelPaths = secondFiles
+        .map((f) => normalizeRelPath(f.relativePath))
+        .sort((a, b) => b.localeCompare(a, "zh-CN"));
+      let focusRel = resolveSecondPlanFocusRel(planRelPaths);
+      let fileOnlyNow = false;
+      try {
+        fileOnlyNow = tryGetLocalStorage(LS_QUIZ_FILE_ONLY) === "1";
+      } catch {
+        /* ignore */
+      }
+      if (fileOnlyNow && !focusRel && planRelPaths.length) {
+        focusRel = planRelPaths[0];
+      }
+      setQuizFileOnlyMode(fileOnlyNow);
+      setQuizSelectedFolders([]);
+      setQuizSelectedSubjects([]);
+      setQuizSourceWrong(true);
+      setQuizSourceSecond(true);
+      setQuizSecondPlanFocus(focusRel);
+      setQuizFullPool(withIds);
+      const nWrong = withIds.filter((x) => x.kind === "wrongbook").length;
+      const nSecond = withIds.filter((x) => x.kind === "secondpass").length;
+      const initialFiltered = filterQuizPool(withIds, {
+        quizSourceWrong: true,
+        quizSourceSecond: true,
+        quizSelectedFolders: [],
+        quizSelectedSubjects: [],
+        quizSecondPlanFocus: focusRel,
+        quizFileOnlyMode: fileOnlyNow,
+      });
+      const firstPool = initialFiltered.length ? initialFiltered : withIds;
+      const first = firstPool[Math.floor(Math.random() * firstPool.length)];
+      setRandomQuizItem(first);
       setRandomQuizOpen(true);
-      setMessage(`已加载 ${blocks.length} 道错题，随机展示中（不显示答案）`);
+      const modeHint = fileOnlyNow
+        ? `；文件内刷题 · ${focusRel || "请选择 .md"}`
+        : "；文件夹筛选 + 随机（关闭「文件内刷题」时）";
+      setMessage(
+        `已加载 ${withIds.length} 题（错题本 ${nWrong} + 二刷计划 ${nSecond}）${modeHint}`
+      );
     } catch (err) {
       setError(err.message || "随机刷题加载失败");
     } finally {
@@ -536,6 +706,57 @@ function App() {
     setContent(merged);
     setDirty(true);
     setMessage("已插入：学习前3步复位");
+  };
+
+  const startSidebarResize = (e) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = sidebarWidth;
+    let lastW = startW;
+    const onMove = (ev) => {
+      const dx = ev.clientX - startX;
+      let w = startW + dx;
+      w = Math.max(200, Math.min(w, window.innerWidth * 0.72));
+      lastW = w;
+      setSidebarWidth(w);
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      trySetLocalStorage(LS_SIDEBAR_W, String(Math.round(lastW)));
+    };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  };
+
+  const startViewerSplitResize = (e) => {
+    e.preventDefault();
+    const splitEl = viewerSplitRef.current;
+    if (!splitEl) return;
+    let lastRatio = splitRatio;
+    const onMove = (ev) => {
+      const r = splitEl.getBoundingClientRect();
+      if (r.width < 80) return;
+      let ratio = (ev.clientX - r.left) / r.width;
+      ratio = Math.max(0.18, Math.min(0.82, ratio));
+      lastRatio = ratio;
+      setSplitRatio(ratio);
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      trySetLocalStorage(LS_SPLIT_RATIO, String(lastRatio));
+    };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
   };
 
   useEffect(() => {
@@ -622,7 +843,7 @@ function App() {
       </header>
 
       <div className="layout">
-        <aside className="sidebar">
+        <aside className="sidebar" style={{ width: sidebarWidth, flexShrink: 0 }}>
           <h2>Markdown 文件树</h2>
           {files.length === 0 && (
             <p className="hint">
@@ -656,7 +877,7 @@ function App() {
                               : openFile(file)
                           }
                         >
-                          {file.relativePath.replaceAll("\\", "/")}
+                          {normalizeRelPath(file.relativePath)}
                         </button>
                       </li>
                     ))}
@@ -715,31 +936,83 @@ function App() {
           </div>
         </aside>
 
-        <main className={`viewer ${viewMode}`}>
-          {loading && <p className="hint">加载中...</p>}
-          {error && <p className="error">{error}</p>}
-          {message && <p className="success">{message}</p>}
-          {!loading && !error && !activeFile && (
-            <p className="hint">请选择一个文件夹并点击左侧文件查看内容。</p>
-          )}
-          {!loading && !error && activeFile && viewMode !== "preview" && (
-            <textarea
-              ref={editorRef}
-              className="editor"
-              value={content}
-              onChange={(e) => {
-                setContent(e.target.value);
-                setDirty(true);
-              }}
-            />
-          )}
-          {!loading && !error && activeFile && viewMode !== "edit" && (
-            <article
-              className="markdown"
-              dangerouslySetInnerHTML={{ __html: marked.parse(previewMarkdown || "") }}
-            />
-          )}
-        </main>
+        <div
+          className="layout-gutter layout-gutter-sidebar"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="调整侧栏宽度"
+          onMouseDown={startSidebarResize}
+        />
+
+        <div className="layout-main">
+          <main className={`viewer viewer-mode-${viewMode}`}>
+            <div className="viewer-banners">
+              {loading && <p className="hint">加载中...</p>}
+              {error && <p className="error">{error}</p>}
+              {message && <p className="success">{message}</p>}
+            </div>
+
+            {!loading && !error && !activeFile && (
+              <p className="hint viewer-placeholder">请选择一个文件夹并点击左侧文件查看内容。</p>
+            )}
+
+            {!loading && !error && activeFile && viewMode === "edit" && (
+              <textarea
+                ref={editorRef}
+                className="editor viewer-fill"
+                value={content}
+                onChange={(e) => {
+                  setContent(e.target.value);
+                  setDirty(true);
+                }}
+              />
+            )}
+
+            {!loading && !error && activeFile && viewMode === "preview" && (
+              <article
+                className="markdown viewer-fill"
+                dangerouslySetInnerHTML={{ __html: marked.parse(previewMarkdown || "") }}
+              />
+            )}
+
+            {!loading && !error && activeFile && viewMode === "split" && (
+              <div className="viewer-split" ref={viewerSplitRef}>
+                <div
+                  className="viewer-pane"
+                  style={{ flex: `${splitRatio} 1 0%` }}
+                >
+                  <textarea
+                    ref={editorRef}
+                    className="editor viewer-fill"
+                    value={content}
+                    onChange={(e) => {
+                      setContent(e.target.value);
+                      setDirty(true);
+                    }}
+                  />
+                </div>
+                <div
+                  className="layout-gutter layout-gutter-split"
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label="调整编辑区与预览区比例"
+                  onMouseDown={startViewerSplitResize}
+                />
+                <div
+                  className="viewer-pane"
+                  style={{ flex: `${1 - splitRatio} 1 0%` }}
+                >
+                  <article
+                    className="markdown viewer-fill"
+                    dangerouslySetInnerHTML={{
+                      __html: marked.parse(previewMarkdown || ""),
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+          </main>
+        </div>
       </div>
 
       {randomQuizOpen && randomQuizItem && (
@@ -753,6 +1026,9 @@ function App() {
             <div className="quiz-toolbar">
               <h2 id="quiz-dialog-title" className="quiz-title">
                 随机刷题
+                <span className="quiz-kind-badge">
+                  {randomQuizItem.kind === "secondpass" ? "二刷计划" : "错题本"}
+                </span>
               </h2>
               <div className="quiz-toolbar-btns">
                 <button type="button" onClick={pickRandomFromPool}>
@@ -767,18 +1043,142 @@ function App() {
                 </button>
               </div>
             </div>
+
+            <div className="quiz-filters">
+              <div className="quiz-mode-row">
+                <label className="quiz-check quiz-fileonly-main">
+                  <input
+                    type="checkbox"
+                    checked={quizFileOnlyMode}
+                    onChange={(e) => onQuizFileOnlyChange(e.target.checked)}
+                  />
+                  文件内刷题（仅所选二刷 .md · 不含错题本）
+                </label>
+                <span className="quiz-pool-count">
+                  当前池 {quizFilteredPool.length} / 全量 {quizFullPool.length} 题
+                </span>
+              </div>
+              {quizFileOnlyMode && secondPlanRelPaths.length > 0 && (
+                <div className="quiz-secondplan-row">
+                  <label className="quiz-secondplan-label" htmlFor="quiz-second-md">
+                    二刷 .md
+                  </label>
+                  <select
+                    id="quiz-second-md"
+                    className="quiz-secondplan-select"
+                    value={quizSecondPlanFocus || secondPlanRelPaths[0]}
+                    onChange={onQuizSecondPlanFileChange}
+                  >
+                    {secondPlanRelPaths.map((rel) => (
+                      <option key={rel} value={rel}>
+                        {rel}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="quiz-hint quiz-secondplan-hint">
+                    只从该文件中的「## 题目」抽取；路径仍记在本地以便下次打开
+                  </span>
+                </div>
+              )}
+              {!quizFileOnlyMode && (
+                <>
+                  <div className="quiz-source-row">
+                    <span className="quiz-filter-label">来源</span>
+                    <label className="quiz-check">
+                      <input
+                        type="checkbox"
+                        checked={quizSourceWrong}
+                        onChange={(e) => setQuizSourceWrong(e.target.checked)}
+                      />
+                      错题本
+                    </label>
+                    <label className="quiz-check">
+                      <input
+                        type="checkbox"
+                        checked={quizSourceSecond}
+                        onChange={(e) => setQuizSourceSecond(e.target.checked)}
+                      />
+                      二刷计划
+                    </label>
+                  </div>
+                  <div className="quiz-tags-row">
+                    <span className="quiz-filter-label">文件夹</span>
+                    <span className="quiz-hint quiz-tags-hint">
+                      与侧栏分组一致（仅第一层目录）；不选 = 不限；多选 = 命中其一即可
+                    </span>
+                  </div>
+                  <div className="quiz-tags">
+                    {quizFolderOptions.map((folder) => (
+                      <button
+                        key={folder}
+                        type="button"
+                        className={
+                          quizSelectedFolders.includes(folder)
+                            ? "quiz-tag quiz-tag--on"
+                            : "quiz-tag"
+                        }
+                        onClick={() => toggleQuizFolder(folder)}
+                      >
+                        {folder}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="quiz-tags-row">
+                    <span className="quiz-filter-label">科目</span>
+                    <span className="quiz-hint quiz-tags-hint">
+                      对应「- 科目：」；不选 = 不限；多选 = 命中其一（「高数」亦匹配「高等数学」等）
+                    </span>
+                  </div>
+                  <div className="quiz-tags">
+                    {quizSubjectOptions.map((subj) => (
+                      <button
+                        key={subj}
+                        type="button"
+                        className={
+                          quizSelectedSubjects.includes(subj)
+                            ? "quiz-tag quiz-tag--subject quiz-tag--on"
+                            : "quiz-tag quiz-tag--subject"
+                        }
+                        onClick={() => toggleQuizSubject(subj)}
+                      >
+                        {subj}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+
             <div className="quiz-meta">
-              <p>
-                <strong>首次录入日期</strong>（错题内「日期」字段）：{randomQuizItem.firstDate}
-              </p>
-              <p>
-                <strong>出处</strong>：{randomQuizItem.source}
-              </p>
+              {randomQuizItem.kind === "wrongbook" && (
+                <p>
+                  <strong>首次录入日期</strong>（错题内「日期」字段）：{randomQuizItem.firstDate}
+                </p>
+              )}
+              {randomQuizItem.source && randomQuizItem.source !== "—" && (
+                <p>
+                  <strong>出处</strong>：{randomQuizItem.source}
+                </p>
+              )}
+              {randomQuizItem.kind === "secondpass" &&
+                randomQuizItem.secondPassStandard && (
+                  <p>
+                    <strong>二刷标准</strong>：{randomQuizItem.secondPassStandard}
+                  </p>
+                )}
               <p>
                 <strong>文件</strong>：{randomQuizItem.fileLabel}
               </p>
               <p>
                 <strong>题目标题</strong>：{randomQuizItem.title}
+              </p>
+              {randomQuizItem.subject && (
+                <p>
+                  <strong>科目</strong>：{randomQuizItem.subject}
+                </p>
+              )}
+              <p>
+                <strong>文件夹</strong>：{randomQuizItem.folderTag || "—"}
               </p>
               <p className="quiz-hint">答案见纸质版；本窗口与错题本预览均不展示解析正文。</p>
             </div>
@@ -786,6 +1186,28 @@ function App() {
               className="markdown quiz-body"
               dangerouslySetInnerHTML={{ __html: randomQuizHtml }}
             />
+            <div className="quiz-footer">
+              <div className="quiz-timer">
+                本题计时：<strong>{formatElapsed(quizElapsedSec)}</strong>
+                <span className="quiz-hint">（换题或点对/错后自动重计）</span>
+              </div>
+              <div className="quiz-outcome-btns">
+                <button
+                  type="button"
+                  className="quiz-btn-ok"
+                  onClick={() => recordQuizOutcome(true)}
+                >
+                  做对
+                </button>
+                <button
+                  type="button"
+                  className="quiz-btn-bad"
+                  onClick={() => recordQuizOutcome(false)}
+                >
+                  做错
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
