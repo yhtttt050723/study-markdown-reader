@@ -20,7 +20,7 @@ export function QuizStatsDashboard({ stats, onClose }) {
       <div className="quiz-stats-panel">
         <div className="quiz-stats-toolbar">
           <h2 id="quiz-stats-title" className="quiz-stats-title">
-            刷题数据看板
+            练习统计
           </h2>
           <div className="quiz-stats-toolbar-btns">
             <button type="button" className="ghost-btn" onClick={onClose}>
@@ -31,7 +31,7 @@ export function QuizStatsDashboard({ stats, onClose }) {
 
         {empty ? (
           <p className="quiz-stats-empty">
-            暂无记录。打开「随机刷题」做题并点击「做对 / 做错」后，数据会写入本机{" "}
+            暂无记录。打开「随机练习」做题并点击「做对 / 做错」后，数据会写入本机{" "}
             <code>smr-quiz-log</code>。
           </p>
         ) : (

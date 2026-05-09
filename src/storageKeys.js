@@ -8,6 +8,7 @@ export const LS_SECOND_PLAN_FOCUS = "smr-quiz-second-plan-focus";
 export const LS_QUIZ_FILE_ONLY = "smr-quiz-file-only";
 export const LS_SIDEBAR_W = "smr-sidebar-w";
 export const LS_SPLIT_RATIO = "smr-split-ratio";
+export const LS_FINANCE_STATE = "smr-finance-state";
 
 export function readStoredNumber(key, fallback, min, max) {
   try {

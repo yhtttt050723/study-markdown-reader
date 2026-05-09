@@ -1,6 +1,9 @@
 body {
   margin: 0;
-  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-family: Inter, -apple-system, system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-feature-settings: "lnum" 1;
+  background: #f6f5f4;
+  color: rgba(0, 0, 0, 0.95);
 }
 
 #root {

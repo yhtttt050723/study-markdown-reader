@@ -305,7 +305,11 @@ export function appendQuizLog(entry) {
     if (!Array.isArray(arr)) return;
     arr.push({ ...entry, at: new Date().toISOString() });
     const trimmed = arr.slice(-500);
-    trySetLocalStorage(LS_QUIZ_LOG, JSON.stringify(trimmed));
+    const payload = JSON.stringify(trimmed);
+    trySetLocalStorage(LS_QUIZ_LOG, payload);
+    if (typeof window !== "undefined" && window.electronAPI?.writeQuizLogFile) {
+      void window.electronAPI.writeQuizLogFile(payload);
+    }
   } catch {
     /* ignore */
   }

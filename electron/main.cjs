@@ -2,6 +2,13 @@ const { app, BrowserWindow, dialog, ipcMain } = require("electron");
 const path = require("path");
 const fs = require("fs");
 
+/** 与渲染进程 localStorage 键 `smr-quiz-log` 对应；持久化到磁盘避免仅依赖 localStorage 在部分环境下丢失 */
+const QUIZ_LOG_FILENAME = "smr-quiz-log.json";
+
+function getQuizLogPath() {
+  return path.join(app.getPath("userData"), QUIZ_LOG_FILENAME);
+}
+
 const MARKDOWN_EXTENSIONS = new Set([".md", ".mdc"]);
 const IGNORED_DIRS = new Set([
   "node_modules",
@@ -114,6 +121,36 @@ ipcMain.handle("read-local-image-as-data-url", async (_, imagePath) => {
   }
   const base64 = fs.readFileSync(imagePath).toString("base64");
   return `data:${mime};base64,${base64}`;
+});
+
+ipcMain.handle("read-quiz-log", async () => {
+  try {
+    const p = getQuizLogPath();
+    if (!fs.existsSync(p)) {
+      return [];
+    }
+    const raw = fs.readFileSync(p, "utf-8");
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch (e) {
+    console.error("read-quiz-log", e);
+    return [];
+  }
+});
+
+ipcMain.handle("write-quiz-log", async (_, jsonString) => {
+  try {
+    const p = getQuizLogPath();
+    const dir = path.dirname(p);
+    fs.mkdirSync(dir, { recursive: true });
+    const tmp = `${p}.tmp`;
+    fs.writeFileSync(tmp, jsonString ?? "[]", "utf-8");
+    fs.renameSync(tmp, p);
+    return true;
+  } catch (e) {
+    console.error("write-quiz-log", e);
+    return false;
+  }
 });
 
 app.whenReady().then(() => {

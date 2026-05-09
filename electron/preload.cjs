@@ -8,4 +8,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("write-markdown-file", filePath, content),
   readLocalImageAsDataUrl: (imagePath) =>
     ipcRenderer.invoke("read-local-image-as-data-url", imagePath),
+  /** 刷题日志持久化（userData/smr-quiz-log.json），与 localStorage `smr-quiz-log` 同步 */
+  readQuizLogFile: () => ipcRenderer.invoke("read-quiz-log"),
+  writeQuizLogFile: (jsonString) => ipcRenderer.invoke("write-quiz-log", jsonString),
 });

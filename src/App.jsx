@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { marked } from "marked";
 import "./App.css";
 import {
-  LS_SECOND_PLAN_FOCUS,
   LS_QUIZ_FILE_ONLY,
+  LS_QUIZ_LOG,
+  LS_SECOND_PLAN_FOCUS,
   LS_SIDEBAR_W,
   LS_SPLIT_RATIO,
   readStoredNumber,
@@ -66,6 +67,8 @@ import {
 import { StudyPathDashboard } from "./StudyPathDashboard.jsx";
 import { StudyProgressDashboard } from "./StudyProgressDashboard.jsx";
 import { WeeklyProgressDashboard } from "./WeeklyProgressDashboard.jsx";
+import { FinanceDashboard } from "./FinanceDashboard.jsx";
+import { readFinanceState, writeFinanceState } from "./finance.js";
 
 const QUICK_TEMPLATES = {
   wrongbook: {
@@ -184,6 +187,8 @@ function App() {
   const [planPathDone, setPlanPathDone] = useState(() => readPlanPathDone());
   const [studyPathOpen, setStudyPathOpen] = useState(false);
   const [weeklyProgressOpen, setWeeklyProgressOpen] = useState(false);
+  const [financeOpen, setFinanceOpen] = useState(false);
+  const [financeState, setFinanceState] = useState(() => readFinanceState());
   const [snapshotTick, setSnapshotTick] = useState(0);
   const [quizLogVersion, setQuizLogVersion] = useState(0);
   const [randomQuizItem, setRandomQuizItem] = useState(null);
@@ -501,10 +506,73 @@ function App() {
   }, [randomQuizItem, folderPath]);
 
   useEffect(() => {
-    if (!weeklyProgressOpen && !studyPathOpen && !studyProgressOpen && !randomQuizOpen && !quizStatsOpen)
+    writeFinanceState(financeState);
+  }, [financeState]);
+
+  /** Electron：刷题日志写入 userData/smr-quiz-log.json；启动时从磁盘恢复到 localStorage（避免仅依赖 localStorage 重启丢失） */
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (!api?.readQuizLogFile || !api?.writeQuizLogFile) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const fromDisk = await api.readQuizLogFile();
+        if (cancelled) return;
+
+        let localArr = [];
+        try {
+          const rawLocal = tryGetLocalStorage(LS_QUIZ_LOG);
+          localArr = rawLocal ? JSON.parse(rawLocal) : [];
+          if (!Array.isArray(localArr)) localArr = [];
+        } catch {
+          localArr = [];
+        }
+
+        const diskArr = Array.isArray(fromDisk) ? fromDisk : [];
+
+        if (diskArr.length === 0 && localArr.length > 0) {
+          const trimmed = localArr.slice(-500);
+          const payload = JSON.stringify(trimmed);
+          trySetLocalStorage(LS_QUIZ_LOG, payload);
+          await api.writeQuizLogFile(payload);
+          setQuizLogVersion((v) => v + 1);
+          return;
+        }
+
+        if (diskArr.length > 0) {
+          const trimmed = diskArr.slice(-500);
+          const nextJson = JSON.stringify(trimmed);
+          const prevJson = tryGetLocalStorage(LS_QUIZ_LOG);
+          trySetLocalStorage(LS_QUIZ_LOG, nextJson);
+          if (prevJson !== nextJson) {
+            setQuizLogVersion((v) => v + 1);
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (
+      !weeklyProgressOpen &&
+      !studyPathOpen &&
+      !studyProgressOpen &&
+      !randomQuizOpen &&
+      !quizStatsOpen &&
+      !financeOpen
+    )
       return;
     const onKey = (e) => {
       if (e.key !== "Escape") return;
+      if (financeOpen) {
+        setFinanceOpen(false);
+        return;
+      }
       if (weeklyProgressOpen) {
         setWeeklyProgressOpen(false);
         return;
@@ -525,7 +593,14 @@ function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [weeklyProgressOpen, studyPathOpen, studyProgressOpen, randomQuizOpen, quizStatsOpen]);
+  }, [
+    weeklyProgressOpen,
+    studyPathOpen,
+    studyProgressOpen,
+    randomQuizOpen,
+    quizStatsOpen,
+    financeOpen,
+  ]);
 
   useEffect(() => {
     const fp = studyProgressFileEntry?.fullPath;
@@ -1115,64 +1190,91 @@ function App() {
         onChange={onWebFolderChange}
       />
       <header className="topbar">
-        <button type="button" onClick={openFolder}>
-          {hasApi ? "打开文件夹" : "选择文件夹（浏览器模式）"}
-        </button>
-        <button type="button" onClick={saveContent} disabled={!activeFile || !dirty}>
-          保存
-        </button>
-        <button type="button" onClick={refreshUi}>
-          刷新UI
-        </button>
-        <button type="button" onClick={openRandomQuiz}>
-          随机刷题
-        </button>
-        <button type="button" onClick={() => setQuizStatsOpen(true)}>
-          刷题数据
-        </button>
-        <button type="button" onClick={() => setStudyPathOpen(true)}>
-          学习路径
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            upsertTodaySnapshot(
-              computeOverallProgressScore(studyProgress, mathCatalog, catalog408)
-            );
-            setSnapshotTick((t) => t + 1);
-            setWeeklyProgressOpen(true);
-          }}
-        >
-          周进度
-        </button>
-        <button type="button" onClick={() => setStudyProgressOpen(true)}>
-          学习进度
-        </button>
-        <div className="view-switch">
-          <button
-            type="button"
-            className={viewMode === "split" ? "selected" : ""}
-            onClick={() => setViewMode("split")}
-          >
-            分栏
+        <div className="topbar-group" role="group" aria-label="资料库">
+          <button type="button" className="topbar-btn topbar-btn--primary" onClick={openFolder}>
+            {hasApi ? "打开文件夹" : "网页 · 选择文件夹"}
           </button>
           <button
             type="button"
-            className={viewMode === "edit" ? "selected" : ""}
-            onClick={() => setViewMode("edit")}
+            className="topbar-btn topbar-btn--secondary"
+            onClick={saveContent}
+            disabled={!activeFile || !dirty}
+            title={activeFile && dirty ? "保存（Ctrl+S）" : undefined}
           >
-            编辑
+            保存
           </button>
-          <button
-            type="button"
-            className={viewMode === "preview" ? "selected" : ""}
-            onClick={() => setViewMode("preview")}
-          >
-            预览
+          <button type="button" className="topbar-btn topbar-btn--secondary" onClick={refreshUi}>
+            刷新界面
           </button>
         </div>
-        <div className="folder-path">{folderPath || "尚未选择文件夹"}</div>
-        {dirty && <span className="dirty">未保存</span>}
+        <div className="topbar-group" role="group" aria-label="练习">
+          <button type="button" className="topbar-btn topbar-btn--secondary" onClick={openRandomQuiz}>
+            随机练习
+          </button>
+          <button
+            type="button"
+            className="topbar-btn topbar-btn--secondary"
+            onClick={() => setQuizStatsOpen(true)}
+          >
+            练习统计
+          </button>
+        </div>
+        <div className="topbar-group" role="group" aria-label="规划">
+          <button type="button" className="topbar-btn topbar-btn--secondary" onClick={() => setStudyPathOpen(true)}>
+            学习路径
+          </button>
+          <button
+            type="button"
+            className="topbar-btn topbar-btn--secondary"
+            onClick={() => {
+              upsertTodaySnapshot(
+                computeOverallProgressScore(studyProgress, mathCatalog, catalog408)
+              );
+              setSnapshotTick((t) => t + 1);
+              setWeeklyProgressOpen(true);
+            }}
+          >
+            本周进度
+          </button>
+          <button type="button" className="topbar-btn topbar-btn--secondary" onClick={() => setStudyProgressOpen(true)}>
+            学习进度
+          </button>
+        </div>
+        <div className="topbar-group" role="group" aria-label="工具">
+          <button type="button" className="topbar-btn topbar-btn--secondary" onClick={() => setFinanceOpen(true)}>
+            记账
+          </button>
+        </div>
+        <span className="topbar-spacer" aria-hidden="true" />
+        <div className="topbar-tail">
+          <div className="view-switch" role="group" aria-label="视图模式">
+            <button
+              type="button"
+              className={viewMode === "split" ? "selected" : ""}
+              onClick={() => setViewMode("split")}
+            >
+              分栏
+            </button>
+            <button
+              type="button"
+              className={viewMode === "edit" ? "selected" : ""}
+              onClick={() => setViewMode("edit")}
+            >
+              编辑
+            </button>
+            <button
+              type="button"
+              className={viewMode === "preview" ? "selected" : ""}
+              onClick={() => setViewMode("preview")}
+            >
+              预览
+            </button>
+          </div>
+          <div className="folder-path" title={folderPath || undefined}>
+            {folderPath || "未选择文件夹"}
+          </div>
+          {dirty && <span className="dirty">未保存</span>}
+        </div>
       </header>
 
       <div className="layout">
@@ -1377,7 +1479,7 @@ function App() {
           <div className="quiz-panel">
             <div className="quiz-toolbar">
               <h2 id="quiz-dialog-title" className="quiz-title">
-                随机刷题
+                随机练习
                 <span className="quiz-kind-badge">
                   {randomQuizItem.kind === "secondpass" ? "二刷计划" : "错题本"}
                 </span>
@@ -1606,6 +1708,14 @@ function App() {
           dayRows={weeklyProgressStats.dayRows}
           dailyReportDays={weeklyProgressStats.dailyReportDays}
           onClose={() => setWeeklyProgressOpen(false)}
+        />
+      )}
+
+      {financeOpen && (
+        <FinanceDashboard
+          state={financeState}
+          onChange={setFinanceState}
+          onClose={() => setFinanceOpen(false)}
         />
       )}
     </div>
