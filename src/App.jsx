@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { marked } from "marked";
 import "./App.css";
 import {
@@ -28,6 +28,33 @@ import {
   splitWrongBookBlocks,
   stripAnswerSectionsForPractice,
 } from "./markdownQuiz.js";
+import { aggregateQuizStats, readQuizLog } from "./quizLogAnalytics.js";
+import { QuizStatsDashboard } from "./QuizStatsDashboard.jsx";
+import { SchoolTargetsDashboard } from "./SchoolTargetsDashboard.jsx";
+import { isSchoolTargetsFile, parseSchoolTargetsMarkdown } from "./schoolTargets.js";
+import {
+  buildStudyProgressMarkdown,
+  DEFAULT_STUDY_PROGRESS,
+  isStudyProgressFile,
+  mergeStudyProgressData,
+  parseStudyProgressFromMarkdown,
+  readStudyProgress,
+  resolveStudyProgressDefaultPath,
+  writeStudyProgress,
+} from "./studyProgress.js";
+import {
+  findSubjectCatalogFile,
+  parse408Catalog,
+  parseMathCatalog,
+} from "./studyCatalog.js";
+import {
+  isPlanPathSourceFile,
+  parsePlanPathFromMarkdown,
+  readPlanPathDone,
+  writePlanPathDone,
+} from "./studyPlanPath.js";
+import { StudyPathDashboard } from "./StudyPathDashboard.jsx";
+import { StudyProgressDashboard } from "./StudyProgressDashboard.jsx";
 
 const QUICK_TEMPLATES = {
   wrongbook: {
@@ -137,6 +164,15 @@ function App() {
   const [imageDataMap, setImageDataMap] = useState({});
   const [preStudyChecks, setPreStudyChecks] = useState([false, false, false]);
   const [randomQuizOpen, setRandomQuizOpen] = useState(false);
+  const [quizStatsOpen, setQuizStatsOpen] = useState(false);
+  const [studyProgressOpen, setStudyProgressOpen] = useState(false);
+  const [studyProgress, setStudyProgress] = useState(() => readStudyProgress());
+  const [mathCatalogRaw, setMathCatalogRaw] = useState("");
+  const [catalog408Raw, setCatalog408Raw] = useState("");
+  const [planPathRaw, setPlanPathRaw] = useState("");
+  const [planPathDone, setPlanPathDone] = useState(() => readPlanPathDone());
+  const [studyPathOpen, setStudyPathOpen] = useState(false);
+  const [quizLogVersion, setQuizLogVersion] = useState(0);
   const [randomQuizItem, setRandomQuizItem] = useState(null);
   const [randomQuizImageData, setRandomQuizImageData] = useState(null);
   const [quizFullPool, setQuizFullPool] = useState([]);
@@ -148,6 +184,7 @@ function App() {
   const [quizFileOnlyMode, setQuizFileOnlyMode] = useState(false);
   const [quizElapsedSec, setQuizElapsedSec] = useState(0);
   const quizStartedAtRef = useRef(0);
+  const progressWriteTimerRef = useRef(null);
   const webInputRef = useRef(null);
   const editorRef = useRef(null);
   const viewerSplitRef = useRef(null);
@@ -226,6 +263,123 @@ function App() {
     quizFileOnlyMode,
   ]);
 
+  const studyProgressFileEntry = useMemo(
+    () => files.find((f) => isStudyProgressFile(f)) ?? null,
+    [files]
+  );
+
+  const mathCatalog = useMemo(() => parseMathCatalog(mathCatalogRaw), [mathCatalogRaw]);
+  const catalog408 = useMemo(() => parse408Catalog(catalog408Raw), [catalog408Raw]);
+  const planPathNodes = useMemo(
+    () => parsePlanPathFromMarkdown(planPathRaw),
+    [planPathRaw]
+  );
+
+  const progressSourceHint = useMemo(() => {
+    if (studyProgressFileEntry) {
+      return `数据来自「${normalizeRelPath(studyProgressFileEntry.relativePath)}」内的 smr-progress 代码块；同时写入 localStorage 作备份。`;
+    }
+    if (hasApi && folderPath) {
+      return `当前未见「学习进度」文件；在下方调整后会写入「周期记录/学习进度.md」（首次自动创建），并同步 localStorage。`;
+    }
+    return `未打开本地文件夹时仅使用浏览器 localStorage（smr-study-progress）。`;
+  }, [studyProgressFileEntry, hasApi, folderPath]);
+
+  const progressCatalogHint = useMemo(() => {
+    const parts = [];
+    if (files.length === 0) return null;
+    if (!mathCatalogRaw)
+      parts.push(
+        "未读取到 Math.mdc：数学进度按内置章数估算（请放在「学习资料/MDC归档/科目目录」等路径下）。"
+      );
+    if (!catalog408Raw)
+      parts.push("未读取到 408.mdc：408 进度按内置章数估算（建议学习资料/MDC归档/科目目录/408.mdc）。");
+    return parts.length ? parts.join(" ") : null;
+  }, [mathCatalogRaw, catalog408Raw, files.length]);
+
+  const persistStudyProgress = useCallback(
+    (next) => {
+      const merged = mergeStudyProgressData(
+        structuredClone(DEFAULT_STUDY_PROGRESS),
+        next,
+        { math: mathCatalog, cs408: catalog408 }
+      );
+      setStudyProgress(merged);
+      writeStudyProgress(merged);
+      if (!canNativeSave || !folderPath) return;
+      const targetPath =
+        studyProgressFileEntry?.fullPath ?? resolveStudyProgressDefaultPath(folderPath);
+      if (!targetPath) return;
+      const hadFileInTree = Boolean(studyProgressFileEntry);
+      window.clearTimeout(progressWriteTimerRef.current);
+      progressWriteTimerRef.current = window.setTimeout(async () => {
+        try {
+          await window.electronAPI.writeMarkdownFile(
+            targetPath,
+            buildStudyProgressMarkdown(merged)
+          );
+          if (!hadFileInTree && folderPath && window.electronAPI?.listMarkdownFiles) {
+            const markdownFiles = await window.electronAPI.listMarkdownFiles(folderPath);
+            setFiles(markdownFiles);
+          }
+        } catch (err) {
+          setError(err.message || "学习进度.md 写入失败");
+        }
+      }, 400);
+    },
+    [canNativeSave, folderPath, studyProgressFileEntry, mathCatalog, catalog408]
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const mf = findSubjectCatalogFile(files, "Math.mdc");
+      const f408 = findSubjectCatalogFile(files, "408.mdc");
+      const planFile = files.find((f) => isPlanPathSourceFile(f)) ?? null;
+      let math = "";
+      let c408 = "";
+      let planMd = "";
+      if (mf) {
+        try {
+          math = await readMarkdownFileText(mf, mode);
+        } catch {
+          math = "";
+        }
+      }
+      if (f408) {
+        try {
+          c408 = await readMarkdownFileText(f408, mode);
+        } catch {
+          c408 = "";
+        }
+      }
+      if (planFile) {
+        try {
+          planMd = await readMarkdownFileText(planFile, mode);
+        } catch {
+          planMd = "";
+        }
+      }
+      if (!cancelled) {
+        setMathCatalogRaw(math);
+        setCatalog408Raw(c408);
+        setPlanPathRaw(planMd);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [files, mode]);
+
+  useEffect(() => {
+    setStudyProgress((prev) =>
+      mergeStudyProgressData(structuredClone(DEFAULT_STUDY_PROGRESS), prev, {
+        math: mathCatalog,
+        cs408: catalog408,
+      })
+    );
+  }, [mathCatalog, catalog408]);
+
   useEffect(() => {
     if (!randomQuizOpen || !randomQuizItem) return;
     quizStartedAtRef.current = Date.now();
@@ -299,13 +453,94 @@ function App() {
   }, [randomQuizItem]);
 
   useEffect(() => {
-    if (!randomQuizOpen) return;
+    if (!studyPathOpen && !studyProgressOpen && !randomQuizOpen && !quizStatsOpen) return;
     const onKey = (e) => {
-      if (e.key === "Escape") setRandomQuizOpen(false);
+      if (e.key !== "Escape") return;
+      if (studyPathOpen) {
+        setStudyPathOpen(false);
+        return;
+      }
+      if (studyProgressOpen) {
+        setStudyProgressOpen(false);
+        return;
+      }
+      if (quizStatsOpen) {
+        setQuizStatsOpen(false);
+        return;
+      }
+      if (randomQuizOpen) setRandomQuizOpen(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [randomQuizOpen]);
+  }, [studyPathOpen, studyProgressOpen, randomQuizOpen, quizStatsOpen]);
+
+  useEffect(() => {
+    const fp = studyProgressFileEntry?.fullPath;
+    if (!fp || typeof window.electronAPI?.readMarkdownFile !== "function") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const md = await window.electronAPI.readMarkdownFile(fp);
+        if (cancelled) return;
+        const next = parseStudyProgressFromMarkdown(md, {
+          math: mathCatalog,
+          cs408: catalog408,
+        });
+        setStudyProgress(next);
+        writeStudyProgress(next);
+      } catch {
+        /* 保留当前内存状态 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [studyProgressFileEntry?.fullPath, mathCatalog, catalog408]);
+
+  useEffect(() => {
+    if (!studyProgressOpen) return;
+    const fp = studyProgressFileEntry?.fullPath;
+    if (fp && typeof window.electronAPI?.readMarkdownFile === "function") {
+      let cancelled = false;
+      (async () => {
+        try {
+          const md = await window.electronAPI.readMarkdownFile(fp);
+          if (cancelled) return;
+          const next = parseStudyProgressFromMarkdown(md, {
+            math: mathCatalog,
+            cs408: catalog408,
+          });
+          setStudyProgress(next);
+          writeStudyProgress(next);
+        } catch {
+          if (!cancelled) {
+            setStudyProgress(
+              mergeStudyProgressData(
+                structuredClone(DEFAULT_STUDY_PROGRESS),
+                readStudyProgress(),
+                { math: mathCatalog, cs408: catalog408 }
+              )
+            );
+          }
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }
+    setStudyProgress(
+      mergeStudyProgressData(structuredClone(DEFAULT_STUDY_PROGRESS), readStudyProgress(), {
+        math: mathCatalog,
+        cs408: catalog408,
+      })
+    );
+    return undefined;
+  }, [studyProgressOpen, studyProgressFileEntry?.fullPath, mathCatalog, catalog408]);
+
+  const quizStatsData = useMemo(() => {
+    if (!quizStatsOpen) return null;
+    return aggregateQuizStats(readQuizLog());
+  }, [quizStatsOpen, quizLogVersion]);
 
   const previewMarkdown = useMemo(() => {
     let raw = content || "";
@@ -314,6 +549,13 @@ function App() {
     }
     return injectLocalQuestionImages(raw, imageDataMap);
   }, [content, activeFile, imageDataMap]);
+
+  const schoolTargetsData = useMemo(() => {
+    if (!activeFile || !isSchoolTargetsFile(activeFile)) return null;
+    return parseSchoolTargetsMarkdown(content);
+  }, [activeFile, content]);
+
+  const showSchoolTargetsDash = Boolean(schoolTargetsData?.groups?.length);
 
   const randomQuizHtml = useMemo(() => {
     if (!randomQuizItem) return "";
@@ -457,6 +699,14 @@ function App() {
       }
       setDirty(false);
       setMessage(canNativeSave ? "保存成功" : "已下载文件（当前为兼容保存模式）");
+      if (canNativeSave && activeFile && isStudyProgressFile(activeFile)) {
+        const next = parseStudyProgressFromMarkdown(content, {
+          math: mathCatalog,
+          cs408: catalog408,
+        });
+        setStudyProgress(next);
+        writeStudyProgress(next);
+      }
       setViewMode("split");
     } catch (err) {
       setError(err.message || "保存失败");
@@ -516,6 +766,7 @@ function App() {
       quizFileOnlyMode,
       secondPlanFocus: quizFileOnlyMode ? quizSecondPlanFocus || undefined : undefined,
     });
+    setQuizLogVersion((v) => v + 1);
     setMessage(
       `已记录：${correct ? "对" : "错"}，用时 ${formatElapsed(seconds)}（已写入本地 smr-quiz-log）`
     );
@@ -815,6 +1066,15 @@ function App() {
         <button type="button" onClick={openRandomQuiz}>
           随机刷题
         </button>
+        <button type="button" onClick={() => setQuizStatsOpen(true)}>
+          刷题数据
+        </button>
+        <button type="button" onClick={() => setStudyPathOpen(true)}>
+          学习路径
+        </button>
+        <button type="button" onClick={() => setStudyProgressOpen(true)}>
+          学习进度
+        </button>
         <div className="view-switch">
           <button
             type="button"
@@ -950,6 +1210,15 @@ function App() {
               {loading && <p className="hint">加载中...</p>}
               {error && <p className="error">{error}</p>}
               {message && <p className="success">{message}</p>}
+              {!loading &&
+                !error &&
+                activeFile &&
+                isSchoolTargetsFile(activeFile) &&
+                viewMode === "edit" && (
+                  <p className="hint">
+                    当前为择校目标文件：切换到「预览」或「分栏」可查看数据看板。
+                  </p>
+                )}
             </div>
 
             {!loading && !error && !activeFile && (
@@ -969,10 +1238,15 @@ function App() {
             )}
 
             {!loading && !error && activeFile && viewMode === "preview" && (
-              <article
-                className="markdown viewer-fill"
-                dangerouslySetInnerHTML={{ __html: marked.parse(previewMarkdown || "") }}
-              />
+              <div className="viewer-preview-stack viewer-fill">
+                {showSchoolTargetsDash && (
+                  <SchoolTargetsDashboard data={schoolTargetsData} />
+                )}
+                <article
+                  className="markdown viewer-fill viewer-markdown-scroll"
+                  dangerouslySetInnerHTML={{ __html: marked.parse(previewMarkdown || "") }}
+                />
+              </div>
             )}
 
             {!loading && !error && activeFile && viewMode === "split" && (
@@ -1002,12 +1276,17 @@ function App() {
                   className="viewer-pane"
                   style={{ flex: `${1 - splitRatio} 1 0%` }}
                 >
-                  <article
-                    className="markdown viewer-fill"
-                    dangerouslySetInnerHTML={{
-                      __html: marked.parse(previewMarkdown || ""),
-                    }}
-                  />
+                  <div className="viewer-preview-stack viewer-fill">
+                    {showSchoolTargetsDash && (
+                      <SchoolTargetsDashboard data={schoolTargetsData} />
+                    )}
+                    <article
+                      className="markdown viewer-fill viewer-markdown-scroll"
+                      dangerouslySetInnerHTML={{
+                        __html: marked.parse(previewMarkdown || ""),
+                      }}
+                    />
+                  </div>
                 </div>
               </div>
             )}
@@ -1210,6 +1489,37 @@ function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {quizStatsOpen && (
+        <QuizStatsDashboard stats={quizStatsData} onClose={() => setQuizStatsOpen(false)} />
+      )}
+
+      {studyProgressOpen && (
+        <StudyProgressDashboard
+          data={studyProgress}
+          onChange={persistStudyProgress}
+          onClose={() => setStudyProgressOpen(false)}
+          sourceHint={progressSourceHint}
+          mathCatalog={mathCatalog}
+          catalog408={catalog408}
+          catalogHint={progressCatalogHint}
+        />
+      )}
+
+      {studyPathOpen && (
+        <StudyPathDashboard
+          nodes={planPathNodes}
+          doneMap={planPathDone}
+          onToggleDone={(id) => {
+            setPlanPathDone((prev) => {
+              const next = { ...prev, [id]: !prev[id] };
+              writePlanPathDone(next);
+              return next;
+            });
+          }}
+          onClose={() => setStudyPathOpen(false)}
+        />
       )}
     </div>
   );

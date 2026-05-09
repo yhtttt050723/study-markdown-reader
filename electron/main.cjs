@@ -11,6 +11,7 @@ const IGNORED_DIRS = new Set([
   ".cursor",
   ".vscode",
   "md-reader-app",
+  "软件",
 ]);
 
 function collectMarkdownFiles(dirPath, rootDir = dirPath) {
