@@ -1,6 +1,7 @@
 /** 本应用 localStorage 键统一前缀 `smr-`（见 .cursor/rules） */
 
 export const LS_PLAN_PATH_DONE = "smr-plan-path-done";
+export const LS_PROGRESS_SNAPSHOTS = "smr-progress-snapshots";
 export const LS_STUDY_PROGRESS = "smr-study-progress";
 export const LS_QUIZ_LOG = "smr-quiz-log";
 export const LS_SECOND_PLAN_FOCUS = "smr-quiz-second-plan-focus";

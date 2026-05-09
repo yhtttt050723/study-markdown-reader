@@ -10,6 +10,79 @@ export function normalizeRelPath(p) {
   return (p || "").replaceAll("\\", "/").trim();
 }
 
+/** 重组 Study 根后，曾位于根下的这些一级目录现多在「学习资料」下 */
+const STUDY_ROOT_MOVED_FIRST_SEGMENTS = new Set([
+  "temp_wrongshots",
+  "错题截图",
+  "数学",
+  "英语错题",
+  "408",
+  "考研择校",
+  "二刷计划",
+  "学习计划",
+  "MDC归档",
+]);
+
+/**
+ * 题目图片路径规范化：去引号、合并重复反斜杠、统一为 Windows 反斜杠，便于与磁盘一致。
+ * @param {string} p
+ */
+export function canonicalImagePathForRead(p) {
+  let s = (p || "").trim();
+  if (!s) return s;
+  s = s.replace(/^["']+|["']+$/g, "");
+  if (/^file:\/\//i.test(s)) {
+    s = s.replace(/^file:\/\/\/+/i, "").replace(/\//g, "\\");
+  }
+  s = s.replace(/\//g, "\\");
+  s = s.replace(/\\+/g, "\\");
+  return s.trim();
+}
+
+/**
+ * 依次尝试的本地绝对路径（主路径不存在时尝试插入「学习资料」）。
+ * @param {string} rawFromMarkdown
+ * @param {string} [studyRootFolder] 当前打开的文件夹根，如 D:\Study
+ */
+export function enumerateImageLoadCandidates(rawFromMarkdown, studyRootFolder) {
+  const canon = canonicalImagePathForRead(rawFromMarkdown);
+  const out = [];
+  const add = (x) => {
+    const c = canonicalImagePathForRead(x);
+    if (c && !out.includes(c)) out.push(c);
+  };
+  add(canon);
+  add(rawFromMarkdown);
+
+  const root = (studyRootFolder || "")
+    .trim()
+    .replace(/[/\\]+$/, "")
+    .replace(/\//g, "\\");
+  if (!root || !canon.toLowerCase().startsWith(root.toLowerCase() + "\\")) {
+    return out;
+  }
+  const rest = canon.slice(root.length).replace(/^\\/, "");
+  if (!rest) return out;
+  const first = rest.split("\\")[0];
+  if (
+    STUDY_ROOT_MOVED_FIRST_SEGMENTS.has(first) &&
+    first !== "学习资料" &&
+    first !== "周期记录" &&
+    first !== "电子书" &&
+    first !== "软件"
+  ) {
+    add(`${root}\\学习资料\\${rest}`);
+  }
+  return out;
+}
+
+/** 写入 imageDataMap 时同时挂上原始串与规范串，便于 lookup */
+export function imagePathLookupKeys(rawFromMarkdown) {
+  const t = (rawFromMarkdown || "").trim();
+  const canon = canonicalImagePathForRead(t);
+  return [...new Set([t, canon, canon.replace(/\\/g, "/")])];
+}
+
 /** 错题预览 / 随机刷题：不展示答案（纸质版自持） */
 export function stripAnswerSectionsForPractice(md) {
   let s = md || "";
@@ -30,8 +103,15 @@ export function injectLocalQuestionImages(md, imageDataMap) {
     /- 题目图片：([^\n]+(?:\.png|\.jpg|\.jpeg|\.webp|\.gif))/gi,
     (_m, p1) => {
       const rawPath = p1.trim();
-      const dataUrl = imageDataMap[rawPath];
-      const fallbackPath = rawPath.replaceAll("\\", "/");
+      let dataUrl = null;
+      for (const k of imagePathLookupKeys(rawPath)) {
+        if (imageDataMap[k]) {
+          dataUrl = imageDataMap[k];
+          break;
+        }
+      }
+      const canon = canonicalImagePathForRead(rawPath);
+      const fallbackPath = canon.replaceAll("\\", "/");
       const fallbackUrl = fallbackPath.startsWith("file:///")
         ? fallbackPath
         : `file:///${fallbackPath.replace(/^\/+/, "")}`;
@@ -64,9 +144,7 @@ export function parseWrongBlock(block, fileLabel) {
   const subm = block.match(/^-\s*科目[:：]\s*(.+)$/m);
   const im = block.match(/^-\s*题目图片[:：]\s*(.+)$/m);
   const title = tm ? tm[1].trim() : "未命名";
-  const imagePath = im
-    ? im[1].trim().replace(/^["']|["']$/g, "").replaceAll("/", "\\")
-    : "";
+  const imagePath = im ? canonicalImagePathForRead(im[1]) : "";
   const subject = subm ? subm[1].trim() : "";
   return {
     kind: "wrongbook",
@@ -95,9 +173,7 @@ export function parseSecondPassBlock(block, fileLabel) {
   const im = block.match(/^-\s*题目图片[:：]\s*(.+)$/m);
   const stm = block.match(/^-\s*二刷标准[:：]\s*(.+)$/m);
   const title = tm ? tm[1].trim() : "未命名";
-  const imagePath = im
-    ? im[1].trim().replace(/^["']|["']$/g, "").replaceAll("/", "\\")
-    : "";
+  const imagePath = im ? canonicalImagePathForRead(im[1]) : "";
   const subject = subm ? subm[1].trim() : "";
   return {
     kind: "secondpass",

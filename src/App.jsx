@@ -15,6 +15,8 @@ import {
   buildExpandedGroupsSeed,
   filterQuizPool,
   formatElapsed,
+  enumerateImageLoadCandidates,
+  imagePathLookupKeys,
   injectLocalQuestionImages,
   isSecondPassPlanFile,
   isWrongBookFile,
@@ -53,8 +55,17 @@ import {
   readPlanPathDone,
   writePlanPathDone,
 } from "./studyPlanPath.js";
+import { computeOverallProgressScore } from "./progressScore.js";
+import {
+  computeRollingSevenDayDelta,
+  countDailyReportsInRange,
+  dayOverDayDeltas,
+  readProgressSnapshots,
+  upsertTodaySnapshot,
+} from "./progressSnapshots.js";
 import { StudyPathDashboard } from "./StudyPathDashboard.jsx";
 import { StudyProgressDashboard } from "./StudyProgressDashboard.jsx";
+import { WeeklyProgressDashboard } from "./WeeklyProgressDashboard.jsx";
 
 const QUICK_TEMPLATES = {
   wrongbook: {
@@ -172,6 +183,8 @@ function App() {
   const [planPathRaw, setPlanPathRaw] = useState("");
   const [planPathDone, setPlanPathDone] = useState(() => readPlanPathDone());
   const [studyPathOpen, setStudyPathOpen] = useState(false);
+  const [weeklyProgressOpen, setWeeklyProgressOpen] = useState(false);
+  const [snapshotTick, setSnapshotTick] = useState(0);
   const [quizLogVersion, setQuizLogVersion] = useState(0);
   const [randomQuizItem, setRandomQuizItem] = useState(null);
   const [randomQuizImageData, setRandomQuizImageData] = useState(null);
@@ -285,6 +298,24 @@ function App() {
     return `未打开本地文件夹时仅使用浏览器 localStorage（smr-study-progress）。`;
   }, [studyProgressFileEntry, hasApi, folderPath]);
 
+  const currentOverallScore = useMemo(
+    () => computeOverallProgressScore(studyProgress, mathCatalog, catalog408),
+    [studyProgress, mathCatalog, catalog408]
+  );
+
+  const weeklyProgressStats = useMemo(() => {
+    const snaps = readProgressSnapshots();
+    const roll = computeRollingSevenDayDelta(snaps);
+    const dayRows = dayOverDayDeltas(snaps, roll.startStr, roll.endStr);
+    const dailyReportDays = countDailyReportsInRange(files, roll.startStr, roll.endStr);
+    return {
+      ...roll,
+      dayRows,
+      dailyReportDays,
+      currentScore: currentOverallScore,
+    };
+  }, [snapshotTick, studyProgress, mathCatalog, catalog408, files, currentOverallScore]);
+
   const progressCatalogHint = useMemo(() => {
     const parts = [];
     if (files.length === 0) return null;
@@ -306,6 +337,8 @@ function App() {
       );
       setStudyProgress(merged);
       writeStudyProgress(merged);
+      upsertTodaySnapshot(computeOverallProgressScore(merged, mathCatalog, catalog408));
+      setSnapshotTick((t) => t + 1);
       if (!canNativeSave || !folderPath) return;
       const targetPath =
         studyProgressFileEntry?.fullPath ?? resolveStudyProgressDefaultPath(folderPath);
@@ -423,17 +456,27 @@ function App() {
         setImageDataMap({});
         return;
       }
-      const entries = await Promise.all(
+      const partialMaps = await Promise.all(
         imagePaths.map(async (p) => {
-          const normalized = p.replaceAll("/", "\\");
-          const dataUrl = await window.electronAPI.readLocalImageAsDataUrl(normalized);
-          return [p, dataUrl];
+          const candidates = enumerateImageLoadCandidates(p, folderPath);
+          let dataUrl = null;
+          for (const cand of candidates) {
+            const normalized = cand.replace(/\//g, "\\");
+            const u = await window.electronAPI.readLocalImageAsDataUrl(normalized);
+            if (u) {
+              dataUrl = u;
+              break;
+            }
+          }
+          if (!dataUrl) return {};
+          const keys = imagePathLookupKeys(p);
+          return Object.fromEntries(keys.map((k) => [k, dataUrl]));
         })
       );
-      setImageDataMap(Object.fromEntries(entries.filter(([, data]) => Boolean(data))));
+      setImageDataMap(Object.assign({}, ...partialMaps));
     };
     loadImages();
-  }, [content]);
+  }, [content, folderPath]);
 
   useEffect(() => {
     const path = randomQuizItem?.imagePath;
@@ -443,19 +486,29 @@ function App() {
     }
     let cancelled = false;
     (async () => {
-      const normalized = path.replaceAll("/", "\\");
-      const dataUrl = await window.electronAPI.readLocalImageAsDataUrl(normalized);
+      const candidates = enumerateImageLoadCandidates(path, folderPath);
+      let dataUrl = null;
+      for (const cand of candidates) {
+        const normalized = cand.replace(/\//g, "\\");
+        dataUrl = await window.electronAPI.readLocalImageAsDataUrl(normalized);
+        if (dataUrl) break;
+      }
       if (!cancelled) setRandomQuizImageData(dataUrl);
     })();
     return () => {
       cancelled = true;
     };
-  }, [randomQuizItem]);
+  }, [randomQuizItem, folderPath]);
 
   useEffect(() => {
-    if (!studyPathOpen && !studyProgressOpen && !randomQuizOpen && !quizStatsOpen) return;
+    if (!weeklyProgressOpen && !studyPathOpen && !studyProgressOpen && !randomQuizOpen && !quizStatsOpen)
+      return;
     const onKey = (e) => {
       if (e.key !== "Escape") return;
+      if (weeklyProgressOpen) {
+        setWeeklyProgressOpen(false);
+        return;
+      }
       if (studyPathOpen) {
         setStudyPathOpen(false);
         return;
@@ -472,7 +525,7 @@ function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [studyPathOpen, studyProgressOpen, randomQuizOpen, quizStatsOpen]);
+  }, [weeklyProgressOpen, studyPathOpen, studyProgressOpen, randomQuizOpen, quizStatsOpen]);
 
   useEffect(() => {
     const fp = studyProgressFileEntry?.fullPath;
@@ -488,6 +541,8 @@ function App() {
         });
         setStudyProgress(next);
         writeStudyProgress(next);
+        upsertTodaySnapshot(computeOverallProgressScore(next, mathCatalog, catalog408));
+        setSnapshotTick((t) => t + 1);
       } catch {
         /* 保留当前内存状态 */
       }
@@ -512,15 +567,18 @@ function App() {
           });
           setStudyProgress(next);
           writeStudyProgress(next);
+          upsertTodaySnapshot(computeOverallProgressScore(next, mathCatalog, catalog408));
+          setSnapshotTick((t) => t + 1);
         } catch {
           if (!cancelled) {
-            setStudyProgress(
-              mergeStudyProgressData(
-                structuredClone(DEFAULT_STUDY_PROGRESS),
-                readStudyProgress(),
-                { math: mathCatalog, cs408: catalog408 }
-              )
+            const merged = mergeStudyProgressData(
+              structuredClone(DEFAULT_STUDY_PROGRESS),
+              readStudyProgress(),
+              { math: mathCatalog, cs408: catalog408 }
             );
+            setStudyProgress(merged);
+            upsertTodaySnapshot(computeOverallProgressScore(merged, mathCatalog, catalog408));
+            setSnapshotTick((t) => t + 1);
           }
         }
       })();
@@ -528,12 +586,13 @@ function App() {
         cancelled = true;
       };
     }
-    setStudyProgress(
-      mergeStudyProgressData(structuredClone(DEFAULT_STUDY_PROGRESS), readStudyProgress(), {
-        math: mathCatalog,
-        cs408: catalog408,
-      })
-    );
+    const merged = mergeStudyProgressData(structuredClone(DEFAULT_STUDY_PROGRESS), readStudyProgress(), {
+      math: mathCatalog,
+      cs408: catalog408,
+    });
+    setStudyProgress(merged);
+    upsertTodaySnapshot(computeOverallProgressScore(merged, mathCatalog, catalog408));
+    setSnapshotTick((t) => t + 1);
     return undefined;
   }, [studyProgressOpen, studyProgressFileEntry?.fullPath, mathCatalog, catalog408]);
 
@@ -706,6 +765,8 @@ function App() {
         });
         setStudyProgress(next);
         writeStudyProgress(next);
+        upsertTodaySnapshot(computeOverallProgressScore(next, mathCatalog, catalog408));
+        setSnapshotTick((t) => t + 1);
       }
       setViewMode("split");
     } catch (err) {
@@ -1071,6 +1132,18 @@ function App() {
         </button>
         <button type="button" onClick={() => setStudyPathOpen(true)}>
           学习路径
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            upsertTodaySnapshot(
+              computeOverallProgressScore(studyProgress, mathCatalog, catalog408)
+            );
+            setSnapshotTick((t) => t + 1);
+            setWeeklyProgressOpen(true);
+          }}
+        >
+          周进度
         </button>
         <button type="button" onClick={() => setStudyProgressOpen(true)}>
           学习进度
@@ -1519,6 +1592,20 @@ function App() {
             });
           }}
           onClose={() => setStudyPathOpen(false)}
+        />
+      )}
+
+      {weeklyProgressOpen && (
+        <WeeklyProgressDashboard
+          currentScore={weeklyProgressStats.currentScore}
+          weekStart={weeklyProgressStats.startStr}
+          weekEnd={weeklyProgressStats.endStr}
+          weekDelta={weeklyProgressStats.delta}
+          weekReason={weeklyProgressStats.reason}
+          snapshotsInWindow={weeklyProgressStats.snapshotsInWindow}
+          dayRows={weeklyProgressStats.dayRows}
+          dailyReportDays={weeklyProgressStats.dailyReportDays}
+          onClose={() => setWeeklyProgressOpen(false)}
         />
       )}
     </div>
