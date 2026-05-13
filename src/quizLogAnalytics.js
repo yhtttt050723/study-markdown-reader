@@ -1,6 +1,6 @@
 import { LS_QUIZ_LOG, tryGetLocalStorage } from "./storageKeys.js";
 
-/** @typedef {{ at?: string, kind?: string, correct?: boolean, seconds?: number, title?: string, fileLabel?: string, folderTag?: string, subject?: string, quizFileOnlyMode?: boolean, secondPlanFocus?: string }} QuizLogEntry */
+/** @typedef {{ at?: string, kind?: string, correct?: boolean, seconds?: number, title?: string, fileLabel?: string, folderTag?: string, subject?: string, imagePath?: string, quizItemId?: string, quizFileOnlyMode?: boolean, secondPlanFocus?: string }} QuizLogEntry */
 
 /**
  * 读取本地刷题日志（最多约 500 条，新在后）。

@@ -40,10 +40,22 @@ export function canonicalImagePathForRead(p) {
 }
 
 /**
- * 依次尝试的本地绝对路径（主路径不存在时尝试插入「学习资料」）。
- * @param {string} rawFromMarkdown
- * @param {string} [studyRootFolder] 当前打开的文件夹根，如 D:\Study
+ * 本机曾把「错题截图 / 数学 / 408 …」迁到「学习资料」下；从绝对路径自动补候选，不依赖 folderPath 前缀是否一致。
+ * 例：`D:\Study\错题截图\高数\a.png` → 追加 `D:\Study\学习资料\错题截图\高数\a.png`
  */
+export function tryInsertStudyMaterialsMirror(canonPath) {
+  const canon = canonicalImagePathForRead(canonPath);
+  const m = canon.match(/^([a-zA-Z]:\\[^\\]+)\\([^\\]+)(\\.+)$/);
+  if (!m) return null;
+  const base = m[1];
+  const first = m[2];
+  const tail = m[3].replace(/^\\/, "");
+  if (first === "学习资料") return null;
+  if (!STUDY_ROOT_MOVED_FIRST_SEGMENTS.has(first)) return null;
+  if (["周期记录", "电子书", "软件"].includes(first)) return null;
+  return `${base}\\学习资料\\${first}\\${tail}`;
+}
+
 export function enumerateImageLoadCandidates(rawFromMarkdown, studyRootFolder) {
   const canon = canonicalImagePathForRead(rawFromMarkdown);
   const out = [];
@@ -54,26 +66,60 @@ export function enumerateImageLoadCandidates(rawFromMarkdown, studyRootFolder) {
   add(canon);
   add(rawFromMarkdown);
 
+  const mirrored = tryInsertStudyMaterialsMirror(canon);
+  if (mirrored) add(mirrored);
+
   const root = (studyRootFolder || "")
     .trim()
     .replace(/[/\\]+$/, "")
     .replace(/\//g, "\\");
-  if (!root || !canon.toLowerCase().startsWith(root.toLowerCase() + "\\")) {
-    return out;
-  }
-  const rest = canon.slice(root.length).replace(/^\\/, "");
-  if (!rest) return out;
-  const first = rest.split("\\")[0];
-  if (
-    STUDY_ROOT_MOVED_FIRST_SEGMENTS.has(first) &&
-    first !== "学习资料" &&
-    first !== "周期记录" &&
-    first !== "电子书" &&
-    first !== "软件"
-  ) {
-    add(`${root}\\学习资料\\${rest}`);
+  if (root && canon.toLowerCase().startsWith(root.toLowerCase() + "\\")) {
+    const rest = canon.slice(root.length).replace(/^\\/, "");
+    if (rest) {
+      const first = rest.split("\\")[0];
+      if (
+        STUDY_ROOT_MOVED_FIRST_SEGMENTS.has(first) &&
+        first !== "学习资料" &&
+        first !== "周期记录" &&
+        first !== "电子书" &&
+        first !== "软件"
+      ) {
+        add(`${root}\\学习资料\\${rest}`);
+      }
+    }
   }
   return out;
+}
+
+/** 浏览器内把 UTF-8 路径编成 base64url（与主进程 smr-img 解码一致） */
+export function utf8ToBase64Url(str) {
+  if (typeof str !== "string" || !str) return "";
+  const bytes = new TextEncoder().encode(str);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) {
+    bin += String.fromCharCode(bytes[i]);
+  }
+  const b64 = btoa(bin);
+  return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/u, "");
+}
+
+/** 是否像本机绝对路径（桌面端可走 smr-img://） */
+export function isLocalAbsoluteImagePath(p) {
+  const t = (p || "").trim();
+  if (!t) return false;
+  if (/^file:\/\//i.test(t)) return true;
+  if (/^[a-zA-Z]:[\\/]/.test(t)) return true;
+  if (t.startsWith("/") && !t.startsWith("//")) return true;
+  return false;
+}
+
+/** Electron：由主进程 protocol 读盘，避免 data URL 过大、file:// 被拦截 */
+export function localImageProtocolUrlFromRaw(rawPath) {
+  const canon = canonicalImagePathForRead(rawPath);
+  if (!canon || !isLocalAbsoluteImagePath(rawPath)) return "";
+  const payload = utf8ToBase64Url(canon);
+  if (!payload) return "";
+  return `smr-img://dir/${payload}`;
 }
 
 /** 写入 imageDataMap 时同时挂上原始串与规范串，便于 lookup */
@@ -98,24 +144,36 @@ export function stripAnswerSectionsForPractice(md) {
   return s.replace(/\n{3,}/g, "\n\n").trim();
 }
 
-export function injectLocalQuestionImages(md, imageDataMap) {
+/**
+ * @param {string} md
+ * @param {Record<string, string>} imageDataMap
+ * @param {{ useSmrImgProtocol?: boolean }} [options] 桌面端为 true 时用 smr-img://（主进程读盘），最稳定
+ */
+export function injectLocalQuestionImages(md, imageDataMap, options = {}) {
+  const useSmr = Boolean(options.useSmrImgProtocol);
   return (md || "").replace(
-    /- 题目图片：([^\n]+(?:\.png|\.jpg|\.jpeg|\.webp|\.gif))/gi,
+    /- 题目图片[:：]\s*([^\n]+(?:\.png|\.jpg|\.jpeg|\.webp|\.gif))/gi,
     (_m, p1) => {
       const rawPath = p1.trim();
-      let dataUrl = null;
-      for (const k of imagePathLookupKeys(rawPath)) {
-        if (imageDataMap[k]) {
-          dataUrl = imageDataMap[k];
-          break;
-        }
+      let displayUrl = "";
+      if (useSmr && isLocalAbsoluteImagePath(rawPath)) {
+        displayUrl = localImageProtocolUrlFromRaw(rawPath);
       }
-      const canon = canonicalImagePathForRead(rawPath);
-      const fallbackPath = canon.replaceAll("\\", "/");
-      const fallbackUrl = fallbackPath.startsWith("file:///")
-        ? fallbackPath
-        : `file:///${fallbackPath.replace(/^\/+/, "")}`;
-      const displayUrl = dataUrl || fallbackUrl;
+      if (!displayUrl) {
+        let dataUrl = null;
+        for (const k of imagePathLookupKeys(rawPath)) {
+          if (imageDataMap[k]) {
+            dataUrl = imageDataMap[k];
+            break;
+          }
+        }
+        const canon = canonicalImagePathForRead(rawPath);
+        const fallbackPath = canon.replaceAll("\\", "/");
+        const fallbackUrl = fallbackPath.startsWith("file:///")
+          ? fallbackPath
+          : `file:///${fallbackPath.replace(/^\/+/, "")}`;
+        displayUrl = dataUrl || fallbackUrl;
+      }
       return `- 题目图片：${rawPath}\n\n![题目截图](${displayUrl})`;
     }
   );

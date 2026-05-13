@@ -12,7 +12,9 @@
     "build": "vite build",
     "pack:win": "npm run build && electron-builder --win portable",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "kb:pg": "docker compose -f docker-compose.kb.yml up -d",
+    "kb:serve": "npm run start --prefix kb-server"
   },
   "build": {
     "appId": "com.study.mdreader",

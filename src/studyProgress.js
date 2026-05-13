@@ -46,23 +46,46 @@ export const CS408_CHAPTER_DEFAULT_MAX = {
 };
 
 /**
- * @typedef {{ basicThrough: number, strengthenThrough: number }} MathSubjectProgress
+ * @typedef {{
+ *   basicThrough: number,
+ *   strengthenThrough: number,
+ *   book660Through?: number,
+ *   book660Total?: number,
+ *   book660Caption?: string,
+ * }} MathSubjectProgress
  * @typedef {{ through: number }} Cs408SubjectProgress
  */
 
+/** 《660》高数分册默认总题数（与 `周期记录/进度规划看板.md` 一致；线代/概率开做后可写 `book660Total`） */
+export const BOOK660_DEFAULT_TOTAL_CALC = 360;
+
 /**
  * basicThrough / strengthenThrough：按红书基础篇 / 严选题 **已过章节数**（0～目录章数，与章节条目对齐）。
+ * book660Through / book660Total：《660》当前分册已做题数 / 本分册总题数（高数默认总题数 360；`book660Total: 0` 表示不在看板显示该科 660 条）。
+ * book660Caption：看板「《660》」条下说明文字（可选，如已过至章节）。
  * cs408.through：408 单科基础已过章节数。
  */
 export const DEFAULT_STUDY_PROGRESS = {
   math1: {
-    高数: { basicThrough: 12, strengthenThrough: 12 },
-    线代: { basicThrough: 4, strengthenThrough: 3 },
-    概率论: { basicThrough: 3, strengthenThrough: 2 },
+    高数: {
+      basicThrough: 12,
+      strengthenThrough: 12,
+      book660Through: 80,
+      book660Total: BOOK660_DEFAULT_TOTAL_CALC,
+      book660Caption: "已过至：第六章 定积分应用（第 80 题）",
+    },
+    线代: { basicThrough: 4, strengthenThrough: 3, book660Through: 0, book660Total: 0 },
+    概率论: { basicThrough: 3, strengthenThrough: 2, book660Through: 0, book660Total: 0 },
   },
   math2: {
-    高数: { basicThrough: 0, strengthenThrough: 0 },
-    线代: { basicThrough: 0, strengthenThrough: 0 },
+    高数: {
+      basicThrough: 12,
+      strengthenThrough: 12,
+      book660Through: 80,
+      book660Total: BOOK660_DEFAULT_TOTAL_CALC,
+      book660Caption: "已过至：第六章 定积分应用（第 80 题）",
+    },
+    线代: { basicThrough: 4, strengthenThrough: 3, book660Through: 0, book660Total: 0 },
   },
   cs408: {
     数据结构: { through: 7 },
@@ -106,15 +129,36 @@ function maxCh408(key, chapters) {
   return CS408_CHAPTER_DEFAULT_MAX[key] ?? 8;
 }
 
+/**
+ * @param {string} key 高数 | 线代 | 概率论
+ * @param {Record<string, unknown>} pr
+ */
+function normalizeBook660(key, pr) {
+  const explicitTotal = Math.floor(Number(pr.book660Total));
+  const defaultTotal = key === "高数" ? BOOK660_DEFAULT_TOTAL_CALC : 0;
+  const book660Total =
+    Number.isFinite(explicitTotal) && explicitTotal > 0 ? explicitTotal : defaultTotal;
+  const throughRaw = Math.floor(Number(pr.book660Through));
+  const book660Through =
+    book660Total > 0
+      ? clampUnit(Number.isFinite(throughRaw) ? throughRaw : 0, book660Total)
+      : 0;
+  const cap = pr.book660Caption;
+  const book660Caption = typeof cap === "string" ? cap.trim() : "";
+  return { book660Total, book660Through, book660Caption };
+}
+
 function normalizeMathRow(key, row, chapters) {
   const max = maxChForMath(key, chapters);
   const pr = row && typeof row === "object" ? row : {};
+  const b660 = normalizeBook660(key, pr);
   const hasThrough =
     typeof pr.basicThrough === "number" || typeof pr.strengthenThrough === "number";
   if (hasThrough) {
     return {
       basicThrough: clampThroughValue(pr.basicThrough ?? 0, max),
       strengthenThrough: clampThroughValue(pr.strengthenThrough ?? 0, max),
+      ...b660,
     };
   }
   if ("basicPct" in pr || "strengthenPct" in pr) {
@@ -122,11 +166,13 @@ function normalizeMathRow(key, row, chapters) {
     return {
       basicThrough: n ? Math.round(((Number(pr.basicPct) || 0) / 100) * n) : 0,
       strengthenThrough: n ? Math.round(((Number(pr.strengthenPct) || 0) / 100) * n) : 0,
+      ...b660,
     };
   }
   return {
     basicThrough: clampThroughValue(pr.basicThrough ?? 0, max),
     strengthenThrough: clampThroughValue(pr.strengthenThrough ?? 0, max),
+    ...b660,
   };
 }
 
@@ -259,7 +305,7 @@ export function buildStudyProgressMarkdown(data) {
   const json = JSON.stringify(data, null, 2);
   return `# 学习进度
 
-本文件由 Study Markdown Reader 维护。下方以 \`${STUDY_PROGRESS_FENCE}\` 标记的 JSON 代码块与顶栏「学习进度」看板一致；进度字段与 \`科目目录/Math.mdc\`、\`科目目录/408.mdc\` 中章节对应（basicThrough / strengthenThrough / through 表示已过章节数）。可直接改 JSON 后 **Ctrl+S** 保存，再点「刷新 UI」或重新打开看板即可同步。
+本文件由 Study Markdown Reader 维护。下方以 \`${STUDY_PROGRESS_FENCE}\` 标记的 JSON 代码块与顶栏「学习进度」看板一致；进度字段与 \`科目目录/Math.mdc\`、\`科目目录/408.mdc\` 中章节对应（basicThrough / strengthenThrough / through 表示已过章节数）。**《660》**：每科可选 **book660Through**（已做题数）、**book660Total**（本分册总题数，高数默认 360；线代/概率填 0 则看板不显示该科 660 条）、**book660Caption**（看板说明，可选）。可直接改 JSON 后 **Ctrl+S** 保存，再点「刷新 UI」或重新打开看板即可同步。
 
 \`\`\`${STUDY_PROGRESS_FENCE}
 ${json}

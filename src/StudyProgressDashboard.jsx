@@ -2,6 +2,7 @@ import {
   chapterThroughToPct,
 } from "./studyCatalog.js";
 import {
+  BOOK660_DEFAULT_TOTAL_CALC,
   CS408_CHAPTER_DEFAULT_MAX,
   ENGLISH_BASIC_UNITS,
   ENGLISH_MUST_UNITS,
@@ -24,6 +25,23 @@ function MathSubjectTracks({
   const maxSlider = Math.max(1, total);
   const bt = Math.min(Math.max(0, phase.basicThrough ?? 0), total);
   const st = Math.min(Math.max(0, phase.strengthenThrough ?? 0), total);
+
+  const book660Total =
+    typeof phase.book660Total === "number" && phase.book660Total > 0
+      ? phase.book660Total
+      : subjectKey === "高数"
+        ? BOOK660_DEFAULT_TOTAL_CALC
+        : 0;
+  const show660 = book660Total > 0;
+  const b660 = Math.min(Math.max(0, phase.book660Through ?? 0), book660Total);
+  const pct660 = chapterThroughToPct(b660, book660Total);
+  const caption660 = () => {
+    const custom = typeof phase.book660Caption === "string" && phase.book660Caption.trim();
+    if (custom) return phase.book660Caption.trim();
+    if (b660 <= 0) return "未开始";
+    if (b660 >= book660Total) return "《660》本分册已全部完成";
+    return `已过至：第 ${b660} / ${book660Total} 题`;
+  };
 
   const caption = (through) => {
     if (through <= 0) return "未开始";
@@ -91,6 +109,36 @@ function MathSubjectTracks({
           />
         </div>
       </div>
+
+      {show660 ? (
+        <div className="progress-dash-track-block">
+          <div className="progress-dash-track-head">
+            <span className="progress-dash-track-name">《660》</span>
+            <span className="progress-dash-track-meta">
+              {b660}/{book660Total} 题 · {pct660}%
+            </span>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={book660Total}
+            value={b660}
+            onChange={(e) =>
+              onChange({
+                ...phase,
+                book660Through: Number(e.target.value),
+              })
+            }
+          />
+          <p className="progress-dash-track-caption">{caption660()}</p>
+          <div className="progress-dash-mini-bar" aria-hidden>
+            <div
+              className="progress-dash-mini-fill progress-dash-mini-fill--660"
+              style={{ width: `${pct660}%` }}
+            />
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -1,0 +1,24 @@
+# 个人知识库：PostgreSQL + pgvector
+# 启动：docker compose -f docker-compose.kb.yml up -d
+# 默认连接：postgresql://studykb:studykb@localhost:5433/studykb
+
+services:
+  studykb-pg:
+    image: pgvector/pgvector:pg16
+    container_name: study-markdown-kb
+    environment:
+      POSTGRES_USER: studykb
+      POSTGRES_PASSWORD: studykb
+      POSTGRES_DB: studykb
+    ports:
+      - "5433:5432"
+    volumes:
+      - studykb_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U studykb -d studykb"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  studykb_pgdata:

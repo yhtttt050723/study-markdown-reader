@@ -9,7 +9,7 @@ function barPercent(scoreNum, globalMax) {
   return Math.min(100, Math.max(6, p));
 }
 
-export function SchoolTargetsDashboard({ data }) {
+export function SchoolTargetsDashboard({ data, showTitleBar = true }) {
   const groups = data?.groups || [];
   if (!groups.length) return null;
 
@@ -18,22 +18,24 @@ export function SchoolTargetsDashboard({ data }) {
 
   return (
     <div className="school-dash">
-      <div className="school-dash-header">
-        <h3 className="school-dash-title">择校目标看板</h3>
-        <div className="school-dash-stats">
-          {stats.totalRows > 0 && (
-            <span className="school-dash-stat">
-              共 <strong>{stats.totalRows}</strong> 条目标
-            </span>
-          )}
-          {stats.minScore != null && stats.maxScore != null && (
-            <span className="school-dash-stat">
-              分数区间 <strong>{stats.minScore}</strong> —{" "}
-              <strong>{stats.maxScore}</strong>
-            </span>
-          )}
+      {showTitleBar ? (
+        <div className="school-dash-header">
+          <h3 className="school-dash-title">择校目标看板</h3>
+          <div className="school-dash-stats">
+            {stats.totalRows > 0 && (
+              <span className="school-dash-stat">
+                共 <strong>{stats.totalRows}</strong> 条目标
+              </span>
+            )}
+            {stats.minScore != null && stats.maxScore != null && (
+              <span className="school-dash-stat">
+                分数区间 <strong>{stats.minScore}</strong> —{" "}
+                <strong>{stats.maxScore}</strong>
+              </span>
+            )}
+          </div>
         </div>
-      </div>
+      ) : null}
 
       {groups.map((g) => (
         <section key={g.exam} className="school-dash-group">

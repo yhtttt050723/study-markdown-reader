@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { marked } from "marked";
 import "./App.css";
 import {
+  LS_APP_SECTION,
+  LS_FOLDER_PATH,
   LS_QUIZ_FILE_ONLY,
   LS_QUIZ_LOG,
   LS_SECOND_PLAN_FOCUS,
@@ -35,6 +37,8 @@ import { aggregateQuizStats, readQuizLog } from "./quizLogAnalytics.js";
 import { QuizStatsDashboard } from "./QuizStatsDashboard.jsx";
 import { SchoolTargetsDashboard } from "./SchoolTargetsDashboard.jsx";
 import { isSchoolTargetsFile, parseSchoolTargetsMarkdown } from "./schoolTargets.js";
+import { PlanBoardDashboard } from "./PlanBoardDashboard.jsx";
+import { isPlanBoardFile, parsePlanBoardMarkdown } from "./planBoard.js";
 import {
   buildStudyProgressMarkdown,
   DEFAULT_STUDY_PROGRESS,
@@ -69,6 +73,11 @@ import { StudyProgressDashboard } from "./StudyProgressDashboard.jsx";
 import { WeeklyProgressDashboard } from "./WeeklyProgressDashboard.jsx";
 import { FinanceDashboard } from "./FinanceDashboard.jsx";
 import { readFinanceState, writeFinanceState } from "./finance.js";
+import { pickLatestDailyMemorize } from "./dailyMemorize.js";
+import { pickLatestSecondPassPlan } from "./secondPassPick.js";
+import { HomeHub } from "./HomeHub.jsx";
+import { NotesWorkspace } from "./NotesWorkspace.jsx";
+import { ProgressHub } from "./ProgressHub.jsx";
 
 const QUICK_TEMPLATES = {
   wrongbook: {
@@ -161,8 +170,21 @@ const PRE_STUDY_TASKS = [
   "开学习计时器25分钟，只承诺完成“第一小步”。",
 ];
 
+const APP_SECTIONS = new Set(["home", "reader", "notes", "progress"]);
+
+function readInitialAppSection() {
+  const v = tryGetLocalStorage(LS_APP_SECTION);
+  if (v && APP_SECTIONS.has(v)) return v;
+  return "home";
+}
+
 function App() {
-  const [folderPath, setFolderPath] = useState("");
+  const [folderPath, setFolderPath] = useState(() => {
+    if (typeof window !== "undefined" && window.electronAPI) {
+      return tryGetLocalStorage(LS_FOLDER_PATH)?.trim() || "";
+    }
+    return "";
+  });
   const [files, setFiles] = useState([]);
   const [activeFile, setActiveFile] = useState(null);
   const [content, setContent] = useState("");
@@ -188,6 +210,18 @@ function App() {
   const [studyPathOpen, setStudyPathOpen] = useState(false);
   const [weeklyProgressOpen, setWeeklyProgressOpen] = useState(false);
   const [financeOpen, setFinanceOpen] = useState(false);
+  const [schoolTargetsOpen, setSchoolTargetsOpen] = useState(false);
+  const [schoolTargetsModalData, setSchoolTargetsModalData] = useState(null);
+  const [schoolTargetsModalError, setSchoolTargetsModalError] = useState(null);
+  const [planBoardOverlayOpen, setPlanBoardOverlayOpen] = useState(false);
+  const [planBoardOverlayData, setPlanBoardOverlayData] = useState(null);
+  const [planBoardOverlayError, setPlanBoardOverlayError] = useState(null);
+  const [dailyMemorizeRaw, setDailyMemorizeRaw] = useState("");
+  const [dailyMemorizeErr, setDailyMemorizeErr] = useState("");
+  const [dailyMemorizeLoading, setDailyMemorizeLoading] = useState(false);
+  const [secondPassRaw, setSecondPassRaw] = useState("");
+  const [secondPassErr, setSecondPassErr] = useState("");
+  const [secondPassLoading, setSecondPassLoading] = useState(false);
   const [financeState, setFinanceState] = useState(() => readFinanceState());
   const [snapshotTick, setSnapshotTick] = useState(0);
   const [quizLogVersion, setQuizLogVersion] = useState(0);
@@ -214,6 +248,8 @@ function App() {
     readStoredNumber(LS_SPLIT_RATIO, 0.5, 0.18, 0.82)
   );
 
+  const [appSection, setAppSection] = useState(readInitialAppSection);
+
   const hasApi = useMemo(() => Boolean(window.electronAPI), []);
   const canNativeSave = useMemo(
     () =>
@@ -223,6 +259,83 @@ function App() {
       ),
     []
   );
+
+  const openFile = useCallback(async (file) => {
+    setActiveFile(file);
+    setLoading(true);
+    setError("");
+    setMessage("");
+    if (typeof window.electronAPI?.readMarkdownFile !== "function") {
+      setError("当前环境无法读取文件");
+      setContent("");
+      setLoading(false);
+      return;
+    }
+    try {
+      const fileContent = await window.electronAPI.readMarkdownFile(file.fullPath);
+      setContent(fileContent);
+      setDirty(false);
+    } catch (err) {
+      setError(err.message || "读取文件失败");
+      setContent("");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  /** Electron：打开文件夹并可选持久化路径（浏览器不设默认文件夹） */
+  const loadElectronFolder = useCallback(
+    async (pickedPath, { persist = true, openFirst = true } = {}) => {
+      if (!window.electronAPI?.listMarkdownFiles) return false;
+      setMode("electron");
+      setFolderPath(pickedPath);
+      setLoading(true);
+      setError("");
+      setMessage("");
+      try {
+        const markdownFiles = await window.electronAPI.listMarkdownFiles(pickedPath);
+        setFiles(markdownFiles);
+        if (persist) trySetLocalStorage(LS_FOLDER_PATH, pickedPath);
+        setExpandedGroups(buildExpandedGroupsSeed(markdownFiles));
+        if (markdownFiles.length > 0 && openFirst) {
+          await openFile(markdownFiles[0]);
+        } else {
+          setActiveFile(null);
+          setContent("");
+        }
+        return true;
+      } catch (err) {
+        setError(err.message || "读取文件夹失败");
+        return false;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [openFile]
+  );
+
+  /** 桌面版启动：恢复上次文件夹；若无则探测默认 Study（浏览器 / 云端不设默认） */
+  useEffect(() => {
+    if (!hasApi) return;
+    let cancelled = false;
+    (async () => {
+      const saved = tryGetLocalStorage(LS_FOLDER_PATH)?.trim();
+      if (saved) {
+        const ok = await loadElectronFolder(saved, { persist: true });
+        if (!cancelled && ok) return;
+        if (!ok) trySetLocalStorage(LS_FOLDER_PATH, "");
+      }
+      if (cancelled) return;
+      const api = window.electronAPI;
+      if (typeof api?.defaultStudyFolder !== "function") return;
+      const def = await api.defaultStudyFolder();
+      if (cancelled || !def) return;
+      await loadElectronFolder(def, { persist: true });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [hasApi, loadElectronFolder]);
 
   const groupedFiles = useMemo(() => {
     const groups = {};
@@ -237,6 +350,106 @@ function App() {
     }
     return groups;
   }, [files]);
+
+  const dailyMemorizeFile = useMemo(
+    () => pickLatestDailyMemorize(files),
+    [files]
+  );
+
+  const openDailyMemorizeInReader = useCallback(() => {
+    if (!dailyMemorizeFile) return;
+    if (dirty && activeFile) {
+      if (
+        !window.confirm(
+          "当前有未保存修改，确定打开「每日要背」对应文件？（可先保存再打开）"
+        )
+      ) {
+        return;
+      }
+    }
+    setAppSection("reader");
+    void openFile(dailyMemorizeFile);
+  }, [dailyMemorizeFile, openFile, dirty, activeFile]);
+
+  useEffect(() => {
+    if (!dailyMemorizeFile) {
+      setDailyMemorizeRaw("");
+      setDailyMemorizeErr("");
+      setDailyMemorizeLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setDailyMemorizeLoading(true);
+    setDailyMemorizeErr("");
+    (async () => {
+      try {
+        const t = await readMarkdownFileText(dailyMemorizeFile, mode);
+        if (!cancelled) {
+          setDailyMemorizeRaw(typeof t === "string" ? t : "");
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setDailyMemorizeErr(e?.message || "读取失败");
+          setDailyMemorizeRaw("");
+        }
+      } finally {
+        if (!cancelled) setDailyMemorizeLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [dailyMemorizeFile, mode]);
+
+  const dailySecondPassFile = useMemo(
+    () => pickLatestSecondPassPlan(files),
+    [files]
+  );
+
+  const openDailySecondPassInReader = useCallback(() => {
+    if (!dailySecondPassFile) return;
+    if (dirty && activeFile) {
+      if (
+        !window.confirm(
+          "当前有未保存修改，确定打开「每日二刷」对应文件？（可先保存再打开）"
+        )
+      ) {
+        return;
+      }
+    }
+    setAppSection("reader");
+    void openFile(dailySecondPassFile);
+  }, [dailySecondPassFile, openFile, dirty, activeFile]);
+
+  useEffect(() => {
+    if (!dailySecondPassFile) {
+      setSecondPassRaw("");
+      setSecondPassErr("");
+      setSecondPassLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setSecondPassLoading(true);
+    setSecondPassErr("");
+    (async () => {
+      try {
+        const t = await readMarkdownFileText(dailySecondPassFile, mode);
+        if (!cancelled) {
+          setSecondPassRaw(typeof t === "string" ? t : "");
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setSecondPassErr(e?.message || "读取失败");
+          setSecondPassRaw("");
+        }
+      } finally {
+        if (!cancelled) setSecondPassLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [dailySecondPassFile, mode]);
 
   const secondPlanRelPaths = useMemo(() => {
     return files
@@ -320,6 +533,29 @@ function App() {
       currentScore: currentOverallScore,
     };
   }, [snapshotTick, studyProgress, mathCatalog, catalog408, files, currentOverallScore]);
+
+  const openWeeklyProgress = useCallback(() => {
+    upsertTodaySnapshot(
+      computeOverallProgressScore(studyProgress, mathCatalog, catalog408)
+    );
+    setSnapshotTick((t) => t + 1);
+    setWeeklyProgressOpen(true);
+  }, [studyProgress, mathCatalog, catalog408]);
+
+  const goReaderHome = useCallback(() => {
+    if (dirty && activeFile) {
+      if (
+        !window.confirm("当前有未保存修改，确定返回首页？（可先点「保存」再返回）")
+      ) {
+        return;
+      }
+    }
+    setAppSection("home");
+  }, [dirty, activeFile]);
+
+  const selectAppSection = useCallback((section) => {
+    if (APP_SECTIONS.has(section)) setAppSection(section);
+  }, []);
 
   const progressCatalogHint = useMemo(() => {
     const parts = [];
@@ -453,7 +689,7 @@ function App() {
     const loadImages = async () => {
       const matches = Array.from(
         (content || "").matchAll(
-          /- 题目图片：([^\n]+(?:\.png|\.jpg|\.jpeg|\.webp|\.gif))/gi
+          /- 题目图片[:：]\s*([^\n]+(?:\.png|\.jpg|\.jpeg|\.webp|\.gif))/gi
         )
       );
       const imagePaths = [...new Set(matches.map((m) => m[1].trim()))];
@@ -508,6 +744,10 @@ function App() {
   useEffect(() => {
     writeFinanceState(financeState);
   }, [financeState]);
+
+  useEffect(() => {
+    trySetLocalStorage(LS_APP_SECTION, appSection);
+  }, [appSection]);
 
   /** Electron：刷题日志写入 userData/smr-quiz-log.json；启动时从磁盘恢复到 localStorage（避免仅依赖 localStorage 重启丢失） */
   useEffect(() => {
@@ -564,7 +804,9 @@ function App() {
       !studyProgressOpen &&
       !randomQuizOpen &&
       !quizStatsOpen &&
-      !financeOpen
+      !financeOpen &&
+      !schoolTargetsOpen &&
+      !planBoardOverlayOpen
     )
       return;
     const onKey = (e) => {
@@ -589,6 +831,14 @@ function App() {
         setQuizStatsOpen(false);
         return;
       }
+      if (schoolTargetsOpen) {
+        setSchoolTargetsOpen(false);
+        return;
+      }
+      if (planBoardOverlayOpen) {
+        setPlanBoardOverlayOpen(false);
+        return;
+      }
       if (randomQuizOpen) setRandomQuizOpen(false);
     };
     window.addEventListener("keydown", onKey);
@@ -600,6 +850,8 @@ function App() {
     randomQuizOpen,
     quizStatsOpen,
     financeOpen,
+    schoolTargetsOpen,
+    planBoardOverlayOpen,
   ]);
 
   useEffect(() => {
@@ -681,8 +933,62 @@ function App() {
     if (activeFile?.name?.includes("错题")) {
       raw = stripAnswerSectionsForPractice(raw);
     }
-    return injectLocalQuestionImages(raw, imageDataMap);
-  }, [content, activeFile, imageDataMap]);
+    return injectLocalQuestionImages(raw, imageDataMap, {
+      useSmrImgProtocol: hasApi,
+    });
+  }, [content, activeFile, imageDataMap, hasApi]);
+
+  const dailyMemorizeHtml = useMemo(() => {
+    if (!dailyMemorizeRaw.trim()) return "";
+    const raw = injectLocalQuestionImages(dailyMemorizeRaw, {}, {
+      useSmrImgProtocol: hasApi,
+    });
+    return marked.parse(raw);
+  }, [dailyMemorizeRaw, hasApi]);
+
+  const homeDailyMemorize = useMemo(
+    () => ({
+      html: dailyMemorizeHtml,
+      relativePath: dailyMemorizeFile
+        ? normalizeRelPath(dailyMemorizeFile.relativePath)
+        : "",
+      loading: dailyMemorizeLoading,
+      error: dailyMemorizeErr,
+      hasFile: Boolean(dailyMemorizeFile),
+    }),
+    [
+      dailyMemorizeHtml,
+      dailyMemorizeFile,
+      dailyMemorizeLoading,
+      dailyMemorizeErr,
+    ]
+  );
+
+  const dailySecondPassHtml = useMemo(() => {
+    if (!secondPassRaw.trim()) return "";
+    const raw = injectLocalQuestionImages(secondPassRaw, {}, {
+      useSmrImgProtocol: hasApi,
+    });
+    return marked.parse(raw);
+  }, [secondPassRaw, hasApi]);
+
+  const homeDailySecondPass = useMemo(
+    () => ({
+      html: dailySecondPassHtml,
+      relativePath: dailySecondPassFile
+        ? normalizeRelPath(dailySecondPassFile.relativePath)
+        : "",
+      loading: secondPassLoading,
+      error: secondPassErr,
+      hasFile: Boolean(dailySecondPassFile),
+    }),
+    [
+      dailySecondPassHtml,
+      dailySecondPassFile,
+      secondPassLoading,
+      secondPassErr,
+    ]
+  );
 
   const schoolTargetsData = useMemo(() => {
     if (!activeFile || !isSchoolTargetsFile(activeFile)) return null;
@@ -691,15 +997,24 @@ function App() {
 
   const showSchoolTargetsDash = Boolean(schoolTargetsData?.groups?.length);
 
+  const planBoardData = useMemo(() => {
+    if (!activeFile || !isPlanBoardFile(activeFile)) return null;
+    return parsePlanBoardMarkdown(content);
+  }, [activeFile, content]);
+
+  const showPlanBoardDash = Boolean(planBoardData?.sections?.length);
+
   const randomQuizHtml = useMemo(() => {
     if (!randomQuizItem) return "";
     const map =
       randomQuizImageData && randomQuizItem.imagePath
         ? { [randomQuizItem.imagePath]: randomQuizImageData }
         : {};
-    const raw = injectLocalQuestionImages(randomQuizItem.bodyForQuiz || "", map);
+    const raw = injectLocalQuestionImages(randomQuizItem.bodyForQuiz || "", map, {
+      useSmrImgProtocol: hasApi,
+    });
     return marked.parse(raw);
-  }, [randomQuizItem, randomQuizImageData]);
+  }, [randomQuizItem, randomQuizImageData, hasApi]);
 
   const openWebFile = async (file) => {
     setLoading(true);
@@ -729,8 +1044,6 @@ function App() {
       return;
     }
 
-    setMode("electron");
-
     setError("");
     setMessage("");
     const pickedPath = await window.electronAPI.pickDirectory();
@@ -738,47 +1051,76 @@ function App() {
       return;
     }
 
-    setFolderPath(pickedPath);
-    setLoading(true);
-    try {
-      const markdownFiles = await window.electronAPI.listMarkdownFiles(pickedPath);
-      setFiles(markdownFiles);
-      if (markdownFiles.length > 0) {
-        await openFile(markdownFiles[0]);
-        setExpandedGroups(buildExpandedGroupsSeed(markdownFiles));
-      } else {
-        setActiveFile(null);
-        setContent("");
-      }
-    } catch (err) {
-      setError(err.message || "读取文件夹失败");
-    } finally {
-      setLoading(false);
-    }
+    await loadElectronFolder(pickedPath, { persist: true });
   };
 
-  const openFile = async (file) => {
-    setActiveFile(file);
-    setLoading(true);
+  const openSchoolTargetsFromHub = useCallback(async () => {
     setError("");
     setMessage("");
-    if (typeof window.electronAPI?.readMarkdownFile !== "function") {
-      setError("当前环境无法读取文件");
-      setContent("");
-      setLoading(false);
+    const entry = files.find((f) => isSchoolTargetsFile(f));
+    if (!entry) {
+      setSchoolTargetsModalError(
+        "未找到「择校目标」Markdown：请先在「Markdown 浏览器」打开 Study 根目录（桌面版启动会自动尝试打开默认 Study），并确认存在文件名或路径含「择校目标」的 .md。"
+      );
+      setSchoolTargetsModalData(null);
+      setSchoolTargetsOpen(true);
       return;
     }
+    setLoading(true);
     try {
-      const fileContent = await window.electronAPI.readMarkdownFile(file.fullPath);
-      setContent(fileContent);
-      setDirty(false);
-    } catch (err) {
-      setError(err.message || "读取文件失败");
-      setContent("");
+      const md = await readMarkdownFileText(entry, mode);
+      const data = parseSchoolTargetsMarkdown(md);
+      if (!data.groups?.length) {
+        setSchoolTargetsModalError("文件中未解析到 ## 11408 或 ## 22408 章节下的表格。");
+        setSchoolTargetsModalData(null);
+      } else {
+        setSchoolTargetsModalError(null);
+        setSchoolTargetsModalData(data);
+      }
+      setSchoolTargetsOpen(true);
+    } catch (e) {
+      setSchoolTargetsModalError(String(e.message || e));
+      setSchoolTargetsModalData(null);
+      setSchoolTargetsOpen(true);
     } finally {
       setLoading(false);
     }
-  };
+  }, [files, mode]);
+
+  const openPlanBoardFromHub = useCallback(async () => {
+    setError("");
+    setMessage("");
+    const entry = files.find((f) => isPlanBoardFile(f));
+    if (!entry) {
+      setPlanBoardOverlayError(
+        "未找到「进度规划看板」：请在 Study 根目录下保留 **`周期记录/进度规划看板.md`**（文件名须含「进度规划看板」），并确保已在 Markdown 浏览器中打开该文件夹。"
+      );
+      setPlanBoardOverlayData(null);
+      setPlanBoardOverlayOpen(true);
+      return;
+    }
+    setLoading(true);
+    try {
+      const md = await readMarkdownFileText(entry, mode);
+      const data = parsePlanBoardMarkdown(md);
+      if (!data.sections?.length) {
+        setPlanBoardOverlayError(
+          "文件中未解析到任何 `## 小节标题`；请至少包含「阶段性计划」「本周验收」等章节。"
+        );
+        setPlanBoardOverlayData(null);
+      } else {
+        setPlanBoardOverlayError(null);
+        setPlanBoardOverlayData(data);
+      }
+      setPlanBoardOverlayOpen(true);
+    } catch (e) {
+      setPlanBoardOverlayError(String(e.message || e));
+      setPlanBoardOverlayData(null);
+      setPlanBoardOverlayOpen(true);
+    } finally {
+      setLoading(false);
+    }
+  }, [files, mode]);
 
   const onWebFolderChange = async (event) => {
     const selectedFiles = Array.from(event.target.files || []);
@@ -898,6 +1240,8 @@ function App() {
       fileLabel: randomQuizItem.fileLabel,
       folderTag: randomQuizItem.folderTag,
       subject: (randomQuizItem.subject || "").trim() || undefined,
+      imagePath: randomQuizItem.imagePath || undefined,
+      quizItemId: randomQuizItem.id,
       quizSelectedSubjects,
       quizFileOnlyMode,
       secondPlanFocus: quizFileOnlyMode ? quizSecondPlanFocus || undefined : undefined,
@@ -1148,6 +1492,8 @@ function App() {
 
   useEffect(() => {
     const onGlobalKeydown = (event) => {
+      // 学习笔记 / 首页 / 进度中心等区块有自己的输入框；勿把 reader 的撤销、保存绑到全局
+      if (appSection !== "reader") return;
       if (!activeFile) return;
       const isCtrlOrMeta = event.ctrlKey || event.metaKey;
       if (!isCtrlOrMeta) return;
@@ -1176,10 +1522,37 @@ function App() {
 
     window.addEventListener("keydown", onGlobalKeydown);
     return () => window.removeEventListener("keydown", onGlobalKeydown);
-  }, [activeFile, content, dirty, mode, canNativeSave]);
+  }, [appSection, activeFile, content, dirty, mode, canNativeSave]);
 
   return (
     <div className="app">
+      {appSection === "home" && (
+        <HomeHub
+          onSelectSection={selectAppSection}
+          dailySecondPass={homeDailySecondPass}
+          onOpenDailySecondPassInReader={openDailySecondPassInReader}
+          dailyMemorize={homeDailyMemorize}
+          onOpenDailyMemorizeInReader={openDailyMemorizeInReader}
+        />
+      )}
+      {appSection === "notes" && (
+        <NotesWorkspace onBack={() => setAppSection("home")} />
+      )}
+      {appSection === "progress" && (
+        <ProgressHub
+          onBack={() => setAppSection("home")}
+          onOpenStudyProgress={() => setStudyProgressOpen(true)}
+          onOpenWeekly={openWeeklyProgress}
+          onOpenPath={() => setStudyPathOpen(true)}
+          onOpenQuizStats={() => setQuizStatsOpen(true)}
+          onOpenFinance={() => setFinanceOpen(true)}
+          onOpenSchoolTargets={openSchoolTargetsFromHub}
+          onOpenPlanBoard={openPlanBoardFromHub}
+          currentScore={weeklyProgressStats.currentScore}
+        />
+      )}
+      {appSection === "reader" && (
+        <>
       <input
         ref={webInputRef}
         type="file"
@@ -1191,6 +1564,9 @@ function App() {
       />
       <header className="topbar">
         <div className="topbar-group" role="group" aria-label="资料库">
+          <button type="button" className="topbar-btn topbar-btn--secondary" onClick={goReaderHome}>
+            返回首页
+          </button>
           <button type="button" className="topbar-btn topbar-btn--primary" onClick={openFolder}>
             {hasApi ? "打开文件夹" : "网页 · 选择文件夹"}
           </button>
@@ -1223,17 +1599,7 @@ function App() {
           <button type="button" className="topbar-btn topbar-btn--secondary" onClick={() => setStudyPathOpen(true)}>
             学习路径
           </button>
-          <button
-            type="button"
-            className="topbar-btn topbar-btn--secondary"
-            onClick={() => {
-              upsertTodaySnapshot(
-                computeOverallProgressScore(studyProgress, mathCatalog, catalog408)
-              );
-              setSnapshotTick((t) => t + 1);
-              setWeeklyProgressOpen(true);
-            }}
-          >
+          <button type="button" className="topbar-btn topbar-btn--secondary" onClick={openWeeklyProgress}>
             本周进度
           </button>
           <button type="button" className="topbar-btn topbar-btn--secondary" onClick={() => setStudyProgressOpen(true)}>
@@ -1314,11 +1680,11 @@ function App() {
                         >
                           {normalizeRelPath(file.relativePath)}
                         </button>
-                      </li>
+            </li>
                     ))}
-                  </ul>
+          </ul>
                 )}
-              </div>
+        </div>
             ))}
           <div className="quick-panel">
             <h3>学习前复位</h3>
@@ -1394,6 +1760,16 @@ function App() {
                     当前为择校目标文件：切换到「预览」或「分栏」可查看数据看板。
                   </p>
                 )}
+              {!loading &&
+                !error &&
+                activeFile &&
+                isPlanBoardFile(activeFile) &&
+                viewMode === "edit" && (
+                  <p className="hint">
+                    当前为进度规划看板：切换到「预览」或「分栏」可查看勾选进度；勾选请在正文编辑{" "}
+                    <code>- [ ]</code> / <code>- [x]</code>。
+                  </p>
+                )}
             </div>
 
             {!loading && !error && !activeFile && (
@@ -1414,6 +1790,7 @@ function App() {
 
             {!loading && !error && activeFile && viewMode === "preview" && (
               <div className="viewer-preview-stack viewer-fill">
+                {showPlanBoardDash && <PlanBoardDashboard data={planBoardData} />}
                 {showSchoolTargetsDash && (
                   <SchoolTargetsDashboard data={schoolTargetsData} />
                 )}
@@ -1452,6 +1829,7 @@ function App() {
                   style={{ flex: `${1 - splitRatio} 1 0%` }}
                 >
                   <div className="viewer-preview-stack viewer-fill">
+                    {showPlanBoardDash && <PlanBoardDashboard data={planBoardData} />}
                     {showSchoolTargetsDash && (
                       <SchoolTargetsDashboard data={schoolTargetsData} />
                     )}
@@ -1468,6 +1846,8 @@ function App() {
           </main>
         </div>
       </div>
+        </>
+      )}
 
       {randomQuizOpen && randomQuizItem && (
         <div
@@ -1495,7 +1875,7 @@ function App() {
                 >
                   关闭（Esc）
                 </button>
-              </div>
+        </div>
             </div>
 
             <div className="quiz-filters">
@@ -1717,6 +2097,74 @@ function App() {
           onChange={setFinanceState}
           onClose={() => setFinanceOpen(false)}
         />
+      )}
+
+      {planBoardOverlayOpen && (
+        <div
+          className="quiz-stats-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="plan-board-overlay-title"
+        >
+          <div className="quiz-stats-panel">
+            <div className="quiz-stats-toolbar">
+              <h2 id="plan-board-overlay-title" className="quiz-stats-title">
+                进度规划看板
+              </h2>
+              <div className="quiz-stats-toolbar-btns">
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={() => setPlanBoardOverlayOpen(false)}
+                >
+                  关闭（Esc）
+                </button>
+              </div>
+            </div>
+            {planBoardOverlayError ? (
+              <p className="quiz-stats-empty">{planBoardOverlayError}</p>
+            ) : null}
+            {planBoardOverlayData?.sections?.length ? (
+              <PlanBoardDashboard data={planBoardOverlayData} embedded />
+            ) : !planBoardOverlayError ? (
+              <p className="quiz-stats-empty">暂无小节数据。</p>
+            ) : null}
+          </div>
+        </div>
+      )}
+
+      {schoolTargetsOpen && (
+        <div
+          className="quiz-stats-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="school-targets-hub-title"
+        >
+          <div className="quiz-stats-panel">
+            <div className="quiz-stats-toolbar">
+              <h2 id="school-targets-hub-title" className="quiz-stats-title">
+                择校目标
+              </h2>
+              <div className="quiz-stats-toolbar-btns">
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={() => setSchoolTargetsOpen(false)}
+                >
+                  关闭（Esc）
+                </button>
+              </div>
+            </div>
+            {schoolTargetsModalError ? (
+              <p className="quiz-stats-empty">{schoolTargetsModalError}</p>
+            ) : null}
+            {schoolTargetsModalData?.groups?.length ? (
+              <SchoolTargetsDashboard data={schoolTargetsModalData} showTitleBar={false} />
+            ) : !schoolTargetsModalError ? (
+              <p className="quiz-stats-empty">暂无表格数据。</p>
+            ) : null}
+          </div>
+        </div>
       )}
     </div>
   );

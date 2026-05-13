@@ -1,5 +1,6 @@
 import { chapterThroughToPct } from "./studyCatalog.js";
 import {
+  BOOK660_DEFAULT_TOTAL_CALC,
   CS408_CHAPTER_DEFAULT_MAX,
   DEFAULT_STUDY_PROGRESS,
   ENGLISH_BASIC_UNITS,
@@ -17,16 +18,30 @@ function max408(key, chapters) {
   return CS408_CHAPTER_DEFAULT_MAX[key] ?? 8;
 }
 
+function mathSubjectScorePct(row, k, mathCat) {
+  const max = maxMath(k, mathCat);
+  const a = chapterThroughToPct(row.basicThrough ?? 0, max);
+  const b = chapterThroughToPct(row.strengthenThrough ?? 0, max);
+  const book660Total =
+    typeof row.book660Total === "number" && row.book660Total > 0
+      ? row.book660Total
+      : k === "高数"
+        ? BOOK660_DEFAULT_TOTAL_CALC
+        : 0;
+  if (book660Total > 0) {
+    const c = chapterThroughToPct(row.book660Through ?? 0, book660Total);
+    return (a + b + c) / 3;
+  }
+  return (a + b) / 2;
+}
+
 function avgMathBlock(map, keys, mathCat) {
   let sum = 0;
   let n = 0;
   for (const k of keys) {
     const row = map[k];
     if (!row) continue;
-    const max = maxMath(k, mathCat);
-    const a = chapterThroughToPct(row.basicThrough ?? 0, max);
-    const b = chapterThroughToPct(row.strengthenThrough ?? 0, max);
-    sum += (a + b) / 2;
+    sum += mathSubjectScorePct(row, k, mathCat);
     n += 1;
   }
   return n ? sum / n : 0;

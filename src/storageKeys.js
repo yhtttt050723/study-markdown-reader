@@ -8,7 +8,15 @@ export const LS_SECOND_PLAN_FOCUS = "smr-quiz-second-plan-focus";
 export const LS_QUIZ_FILE_ONLY = "smr-quiz-file-only";
 export const LS_SIDEBAR_W = "smr-sidebar-w";
 export const LS_SPLIT_RATIO = "smr-split-ratio";
+/** 学习笔记：编辑区 vs 块大纲 横向比例（左侧编辑区占比 0–1） */
+export const LS_NOTES_EDITOR_RATIO = "smr-notes-editor-ratio";
 export const LS_FINANCE_STATE = "smr-finance-state";
+/** 应用区块：home | reader | notes | progress */
+export const LS_APP_SECTION = "smr-app-section";
+/** Electron 上次打开的文件夹绝对路径（浏览器模式不使用） */
+export const LS_FOLDER_PATH = "smr-folder-path";
+/** 速记笔记（与文件夹无关） */
+export const LS_QUICK_NOTES = "smr-quick-notes";
 
 export function readStoredNumber(key, fallback, min, max) {
   try {
