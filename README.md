@@ -6,7 +6,7 @@ A local Markdown reader and editor designed for study workflows, with support fo
 
 - **启动首页**：首次进入为工作区选择页（**Markdown 浏览器** / **学习笔记** / **进度中心**），上次选择记在 **`smr-app-section`**；在 Markdown 浏览器顶栏点 **「返回首页」** 可回到工作区选择（有未保存修改时会确认）；**进度中心**、**学习笔记** 等分区顶栏同样有 **「← 返回首页」**
 - **学习笔记**：独立速记本（多页、Markdown 编辑/预览），数据在 **`smr-quick-notes`**，不依赖当前打开的文件夹；**方案 A 分块**：工具栏插入 **`## 📌` 科目块** 与 **fenced 代码块**，右侧 **块大纲**（当前页内 `##` 标题）点击跳转；**编辑区与大纲之间可拖动调比例**（**`smr-notes-editor-ratio`**）；**Electron** 下可在编辑区 **粘贴截图**（落盘 `userData/quick-notes-assets`，正文 **`smr-img://`**）；可选连接 **PostgreSQL + pgvector** 个人知识库（同步笔记、**知识树** 视图、向量二次划分建议）。详见下文 **个人知识库**
-- **进度中心**：集中入口打开学习进度、本周进度、路径、练习统计、记账等看板（与顶栏功能一致）
+- **进度中心**：集中入口打开学习进度、**视频进度**、本周进度、路径、练习统计、记账等看板（与顶栏功能一致）
 - Open a local folder and auto-scan `.md` / `.mdc` files
 - Grouped file tree in the sidebar (filters common noisy folders)
 - Three modes: Edit / Preview / Split view
@@ -22,6 +22,7 @@ A local Markdown reader and editor designed for study workflows, with support fo
 - **学习路径看板**：顶栏「学习路径」展示蜿蜒路径至终点；节点可点击标记完成（**`smr-plan-path-done`**）。可选在 **`学习计划路径.md`**（文件名含「学习计划路径」）中用 **`smr-plan-path`** JSON 自定义节点
 - **周进度与奖励**：顶栏「本周进度」根据「学习进度」数据计算 **0–100% 综合分**，在本地 **`smr-progress-snapshots`** 中按日记录快照；**最近 7 天**内「窗口内首次与末次快照」之差为本周推进；若 **≥ 10 个百分点** 则提示 **吃饭奖励**。另统计 **`周期记录/YYYY-MM-DD.md`** 周报覆盖天数（与日报文件对应，非从正文解析）
 - **学习进度看板**：顶栏「学习进度」。**数学**：在打开的文件夹中读取 **`Math.mdc`**（常见路径 `学习资料/MDC归档/科目目录/Math.mdc`），解析 **高等数学 / 线性代数 / 概率论** 目录下的章节；每科两条进度：**红书基础篇**、**严选题**，值为「已过章节数」；**高数**下另有第三条 **《660》**（`book660Through` / `book660Total`，高数默认总题数 **360**；线代/概率将 `book660Total` 设为 **0** 则隐藏该条）。**408**：读取 **`408.mdc`**，单科 **基础进度** 对应「第 n 章」。**英语** / **政治** 同前述。**数据**：`周期记录/学习进度.md` 内 **`smr-progress`** 与 **`smr-study-progress`**；无目录文件时按内置章数估算。多遮罩时后开的在上层，**Esc** 先关最上层
+- **视频进度看板**：顶栏「视频进度」与进度中心同入口。**本周观看**：`学习资料/学习视频进度/视频进度看板数据.md` 内 **`smr-video-progress`** 的 **`dailyLog`**（日期 → 分钟），与「本周进度」使用相同的 **最近 7 个自然日**窗口汇总；**B 站系列**：读取 `series[].detailRelPath` 指向的 BV 详情 `.md`，解析每行 **`- [x] **P…**（秒数）`** 得到已勾选时长与全稿时长进度条；分 P 秒数由 MDC 拉取 B 站 `pagelist` 写入详情文件。浏览器模式仅 **`smr-video-progress-board`** localStorage；Electron 保存时写回上述 Markdown
 - **记账与经济状况**：顶栏「记账」打开看板；维护 **当前余额**、可选 **月预算**，记录 **支出流水**（日期、金额、分类、备注）；汇总 **今日 / 近 7 日 / 本月** 支出；可选 **记一笔时从余额扣减**。数据保存在 **`smr-finance-state`**（localStorage）。与其他遮罩并存时 **Esc** 优先关闭最上层（记账为 `z-index: 1002`）
 - In Preview/Split mode, files whose names contain `错题` automatically **hide answer blocks** in the preview pane
 - Supports both Electron desktop mode and browser-compatible mode

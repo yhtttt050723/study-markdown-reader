@@ -3,6 +3,8 @@
 export const LS_PLAN_PATH_DONE = "smr-plan-path-done";
 export const LS_PROGRESS_SNAPSHOTS = "smr-progress-snapshots";
 export const LS_STUDY_PROGRESS = "smr-study-progress";
+/** B 站等学习视频：周观看分钟登记 + 系列详情路径（与「视频进度看板数据.md」同步） */
+export const LS_VIDEO_PROGRESS = "smr-video-progress-board";
 export const LS_QUIZ_LOG = "smr-quiz-log";
 export const LS_SECOND_PLAN_FOCUS = "smr-quiz-second-plan-focus";
 export const LS_QUIZ_FILE_ONLY = "smr-quiz-file-only";

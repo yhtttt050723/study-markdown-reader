@@ -50,6 +50,16 @@ import {
   writeStudyProgress,
 } from "./studyProgress.js";
 import {
+  buildVideoProgressMarkdown,
+  DEFAULT_VIDEO_PROGRESS,
+  isVideoProgressFile,
+  mergeVideoProgressData,
+  parseVideoProgressFromMarkdown,
+  readVideoProgress,
+  resolveVideoProgressDefaultPath,
+  writeVideoProgress,
+} from "./videoProgress.js";
+import {
   findSubjectCatalogFile,
   parse408Catalog,
   parseMathCatalog,
@@ -70,6 +80,7 @@ import {
 } from "./progressSnapshots.js";
 import { StudyPathDashboard } from "./StudyPathDashboard.jsx";
 import { StudyProgressDashboard } from "./StudyProgressDashboard.jsx";
+import { VideoProgressDashboard } from "./VideoProgressDashboard.jsx";
 import { WeeklyProgressDashboard } from "./WeeklyProgressDashboard.jsx";
 import { FinanceDashboard } from "./FinanceDashboard.jsx";
 import { readFinanceState, writeFinanceState } from "./finance.js";
@@ -203,6 +214,8 @@ function App() {
   const [quizStatsOpen, setQuizStatsOpen] = useState(false);
   const [studyProgressOpen, setStudyProgressOpen] = useState(false);
   const [studyProgress, setStudyProgress] = useState(() => readStudyProgress());
+  const [videoProgressOpen, setVideoProgressOpen] = useState(false);
+  const [videoProgress, setVideoProgress] = useState(() => readVideoProgress());
   const [mathCatalogRaw, setMathCatalogRaw] = useState("");
   const [catalog408Raw, setCatalog408Raw] = useState("");
   const [planPathRaw, setPlanPathRaw] = useState("");
@@ -237,6 +250,7 @@ function App() {
   const [quizElapsedSec, setQuizElapsedSec] = useState(0);
   const quizStartedAtRef = useRef(0);
   const progressWriteTimerRef = useRef(null);
+  const videoProgressWriteTimerRef = useRef(null);
   const webInputRef = useRef(null);
   const editorRef = useRef(null);
   const viewerSplitRef = useRef(null);
@@ -499,12 +513,27 @@ function App() {
     [files]
   );
 
+  const videoProgressFileEntry = useMemo(
+    () => files.find((f) => isVideoProgressFile(f)) ?? null,
+    [files]
+  );
+
   const mathCatalog = useMemo(() => parseMathCatalog(mathCatalogRaw), [mathCatalogRaw]);
   const catalog408 = useMemo(() => parse408Catalog(catalog408Raw), [catalog408Raw]);
   const planPathNodes = useMemo(
     () => parsePlanPathFromMarkdown(planPathRaw),
     [planPathRaw]
   );
+
+  const videoProgressSourceHint = useMemo(() => {
+    if (videoProgressFileEntry) {
+      return `数据来自「${normalizeRelPath(videoProgressFileEntry.relativePath)}」内的 smr-video-progress 代码块；同时写入 localStorage（smr-video-progress-board）。`;
+    }
+    if (hasApi && folderPath) {
+      return `当前未见「视频进度看板数据」文件；在看板内修改后会写入「学习资料/学习视频进度/视频进度看板数据.md」。`;
+    }
+    return `未打开本地文件夹时仅使用浏览器 localStorage（smr-video-progress-board）。`;
+  }, [videoProgressFileEntry, hasApi, folderPath]);
 
   const progressSourceHint = useMemo(() => {
     if (studyProgressFileEntry) {
@@ -602,6 +631,35 @@ function App() {
       }, 400);
     },
     [canNativeSave, folderPath, studyProgressFileEntry, mathCatalog, catalog408]
+  );
+
+  const persistVideoProgress = useCallback(
+    (next) => {
+      const merged = mergeVideoProgressData(structuredClone(DEFAULT_VIDEO_PROGRESS), next);
+      setVideoProgress(merged);
+      writeVideoProgress(merged);
+      if (!canNativeSave || !folderPath) return;
+      const targetPath =
+        videoProgressFileEntry?.fullPath ?? resolveVideoProgressDefaultPath(folderPath);
+      if (!targetPath) return;
+      const hadFileInTree = Boolean(videoProgressFileEntry);
+      window.clearTimeout(videoProgressWriteTimerRef.current);
+      videoProgressWriteTimerRef.current = window.setTimeout(async () => {
+        try {
+          await window.electronAPI.writeMarkdownFile(
+            targetPath,
+            buildVideoProgressMarkdown(merged)
+          );
+          if (!hadFileInTree && folderPath && window.electronAPI?.listMarkdownFiles) {
+            const markdownFiles = await window.electronAPI.listMarkdownFiles(folderPath);
+            setFiles(markdownFiles);
+          }
+        } catch (err) {
+          setError(err.message || "视频进度看板数据.md 写入失败");
+        }
+      }, 400);
+    },
+    [canNativeSave, folderPath, videoProgressFileEntry]
   );
 
   useEffect(() => {
@@ -802,6 +860,7 @@ function App() {
       !weeklyProgressOpen &&
       !studyPathOpen &&
       !studyProgressOpen &&
+      !videoProgressOpen &&
       !randomQuizOpen &&
       !quizStatsOpen &&
       !financeOpen &&
@@ -821,6 +880,10 @@ function App() {
       }
       if (studyPathOpen) {
         setStudyPathOpen(false);
+        return;
+      }
+      if (videoProgressOpen) {
+        setVideoProgressOpen(false);
         return;
       }
       if (studyProgressOpen) {
@@ -847,6 +910,7 @@ function App() {
     weeklyProgressOpen,
     studyPathOpen,
     studyProgressOpen,
+    videoProgressOpen,
     randomQuizOpen,
     quizStatsOpen,
     financeOpen,
@@ -878,6 +942,27 @@ function App() {
       cancelled = true;
     };
   }, [studyProgressFileEntry?.fullPath, mathCatalog, catalog408]);
+
+  useEffect(() => {
+    const fp = videoProgressFileEntry?.fullPath;
+    if (!fp || typeof window.electronAPI?.readMarkdownFile !== "function") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const md = await window.electronAPI.readMarkdownFile(fp);
+        if (cancelled) return;
+        const next = parseVideoProgressFromMarkdown(md);
+        const merged = mergeVideoProgressData(structuredClone(DEFAULT_VIDEO_PROGRESS), next);
+        setVideoProgress(merged);
+        writeVideoProgress(merged);
+      } catch {
+        /* 保留当前内存状态 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [videoProgressFileEntry?.fullPath]);
 
   useEffect(() => {
     if (!studyProgressOpen) return;
@@ -922,6 +1007,38 @@ function App() {
     setSnapshotTick((t) => t + 1);
     return undefined;
   }, [studyProgressOpen, studyProgressFileEntry?.fullPath, mathCatalog, catalog408]);
+
+  useEffect(() => {
+    if (!videoProgressOpen) return;
+    const fp = videoProgressFileEntry?.fullPath;
+    if (fp && typeof window.electronAPI?.readMarkdownFile === "function") {
+      let cancelled = false;
+      (async () => {
+        try {
+          const md = await window.electronAPI.readMarkdownFile(fp);
+          if (cancelled) return;
+          const next = parseVideoProgressFromMarkdown(md);
+          const merged = mergeVideoProgressData(structuredClone(DEFAULT_VIDEO_PROGRESS), next);
+          setVideoProgress(merged);
+          writeVideoProgress(merged);
+        } catch {
+          if (!cancelled) {
+            const merged = mergeVideoProgressData(
+              structuredClone(DEFAULT_VIDEO_PROGRESS),
+              readVideoProgress()
+            );
+            setVideoProgress(merged);
+          }
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }
+    const merged = mergeVideoProgressData(structuredClone(DEFAULT_VIDEO_PROGRESS), readVideoProgress());
+    setVideoProgress(merged);
+    return undefined;
+  }, [videoProgressOpen, videoProgressFileEntry?.fullPath]);
 
   const quizStatsData = useMemo(() => {
     if (!quizStatsOpen) return null;
@@ -1184,6 +1301,12 @@ function App() {
         writeStudyProgress(next);
         upsertTodaySnapshot(computeOverallProgressScore(next, mathCatalog, catalog408));
         setSnapshotTick((t) => t + 1);
+      }
+      if (canNativeSave && activeFile && isVideoProgressFile(activeFile)) {
+        const next = parseVideoProgressFromMarkdown(content);
+        const merged = mergeVideoProgressData(structuredClone(DEFAULT_VIDEO_PROGRESS), next);
+        setVideoProgress(merged);
+        writeVideoProgress(merged);
       }
       setViewMode("split");
     } catch (err) {
@@ -1542,6 +1665,7 @@ function App() {
         <ProgressHub
           onBack={() => setAppSection("home")}
           onOpenStudyProgress={() => setStudyProgressOpen(true)}
+          onOpenVideoProgress={() => setVideoProgressOpen(true)}
           onOpenWeekly={openWeeklyProgress}
           onOpenPath={() => setStudyPathOpen(true)}
           onOpenQuizStats={() => setQuizStatsOpen(true)}
@@ -1604,6 +1728,9 @@ function App() {
           </button>
           <button type="button" className="topbar-btn topbar-btn--secondary" onClick={() => setStudyProgressOpen(true)}>
             学习进度
+          </button>
+          <button type="button" className="topbar-btn topbar-btn--secondary" onClick={() => setVideoProgressOpen(true)}>
+            视频进度
           </button>
         </div>
         <div className="topbar-group" role="group" aria-label="工具">
@@ -2059,6 +2186,19 @@ function App() {
           mathCatalog={mathCatalog}
           catalog408={catalog408}
           catalogHint={progressCatalogHint}
+        />
+      )}
+
+      {videoProgressOpen && (
+        <VideoProgressDashboard
+          data={videoProgress}
+          onChange={persistVideoProgress}
+          onClose={() => setVideoProgressOpen(false)}
+          sourceHint={videoProgressSourceHint}
+          weekStart={weeklyProgressStats.startStr}
+          weekEnd={weeklyProgressStats.endStr}
+          folderPath={folderPath}
+          hasApi={hasApi}
         />
       )}
 

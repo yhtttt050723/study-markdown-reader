@@ -3,6 +3,7 @@ import { WorkspaceBackBar } from "./WorkspaceChrome.jsx";
 export function ProgressHub({
   onBack,
   onOpenStudyProgress,
+  onOpenVideoProgress,
   onOpenWeekly,
   onOpenPath,
   onOpenQuizStats,
@@ -16,6 +17,11 @@ export function ProgressHub({
       title: "学习进度",
       desc: "数学 / 408 / 英语 / 政治等条目化进度",
       onClick: onOpenStudyProgress,
+    },
+    {
+      title: "视频进度",
+      desc: "B 站课分 P 时长 + 本周观看分钟登记",
+      onClick: onOpenVideoProgress,
     },
     {
       title: "本周进度",
