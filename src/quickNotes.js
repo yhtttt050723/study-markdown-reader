@@ -26,13 +26,26 @@ export function defaultQuickNotesState() {
   };
 }
 
-function normalizeNote(n) {
-  if (!n || typeof n.id !== "string") return null;
+export function coerceUpdatedAt(value) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString();
+  }
+  if (typeof value === "string" && value.trim()) {
+    return value;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return new Date(value).toISOString();
+  }
+  return new Date().toISOString();
+}
+
+export function normalizeNote(n) {
+  if (!n || n.id == null || n.id === "") return null;
+  const id = String(n.id);
   const title = typeof n.title === "string" ? n.title.slice(0, 200) : "未命名";
   const body =
     typeof n.body === "string" ? n.body.slice(0, MAX_BODY) : "";
-  const updatedAt =
-    typeof n.updatedAt === "string" ? n.updatedAt : new Date().toISOString();
+  const updatedAt = coerceUpdatedAt(n.updatedAt);
   const tagL1 =
     typeof n.tagL1 === "string" && n.tagL1.trim() ? n.tagL1.trim() : "未分类";
   const tagL2 =
@@ -45,7 +58,7 @@ function normalizeNote(n) {
   const vectorCluster =
     typeof n.vectorCluster === "string" ? n.vectorCluster.slice(0, 500) : "";
   return {
-    id: n.id,
+    id,
     title,
     body,
     updatedAt,
@@ -74,10 +87,9 @@ export function readQuickNotesState() {
       s.activeId = s.notes[0]?.id ?? null;
       return s;
     }
+    const rawAid = o.activeId != null ? String(o.activeId) : null;
     const activeId =
-      typeof o.activeId === "string" && notes.some((x) => x.id === o.activeId)
-        ? o.activeId
-        : notes[0].id;
+      rawAid && notes.some((x) => x.id === rawAid) ? rawAid : notes[0].id;
     return { notes, activeId };
   } catch {
     const s = defaultQuickNotesState();
@@ -86,15 +98,31 @@ export function readQuickNotesState() {
   }
 }
 
-export function writeQuickNotesState(state) {
-  // 列表为「新在前」：保留前 MAX_NOTES 条即保留最新；slice(-N) 会误删最新笔记
-  const notes =
-    state.notes.length > MAX_NOTES
-      ? state.notes.slice(0, MAX_NOTES)
-      : state.notes;
-  let activeId = state.activeId;
+/** 统一 id / activeId / 时间字段，避免知识库拉取后 id 类型不一致导致无法编辑 */
+export function normalizeNotesState(state) {
+  const notes = (Array.isArray(state?.notes) ? state.notes : [])
+    .map((n) => normalizeNote(n))
+    .filter(Boolean);
+  let activeId = state?.activeId != null ? String(state.activeId) : null;
   if (activeId && !notes.some((n) => n.id === activeId)) {
     activeId = notes[0]?.id ?? null;
+  } else if (!activeId && notes[0]) {
+    activeId = notes[0].id;
   }
-  trySetLocalStorage(LS_QUICK_NOTES, JSON.stringify({ notes, activeId }));
+  return { notes, activeId };
+}
+
+export function writeQuickNotesState(state) {
+  const { notes: normalized, activeId } = normalizeNotesState(state);
+  // 列表为「新在前」：保留前 MAX_NOTES 条即保留最新；slice(-N) 会误删最新笔记
+  const notes =
+    normalized.length > MAX_NOTES ? normalized.slice(0, MAX_NOTES) : normalized;
+  let activeIdFinal = activeId;
+  if (activeIdFinal && !notes.some((n) => n.id === activeIdFinal)) {
+    activeIdFinal = notes[0]?.id ?? null;
+  }
+  trySetLocalStorage(
+    LS_QUICK_NOTES,
+    JSON.stringify({ notes, activeId: activeIdFinal }),
+  );
 }

@@ -1,14 +1,25 @@
 /**
- * 知识库 API（默认本机）。
- * - `npm run dev`：走 Vite 代理 `/api` → `127.0.0.1:3847`。
- * - `file://`（含打包版 Electron 打开 dist）：直连 `http://127.0.0.1:3847`（需本机已起 kb-server）。
- * - 覆盖地址：构建前设 `VITE_KB_API_URL`。
+ * 知识库 API（默认本机 5214）。
+ * - Electron：直连 kb-server（不依赖 Vite 代理）。
+ * - 浏览器 + `npm run dev`：走 Vite 代理 `/api` → kb-server。
+ * - `file://`（打包 dist）：直连 127.0.0.1:5214。
+ * - 覆盖：`VITE_KB_API_URL=http://127.0.0.1:5214`
  */
+const KB_HOST = "127.0.0.1";
+const KB_PORT = Number(import.meta.env.VITE_KB_PORT) || 5214;
+
+function directKbBase() {
+  return `http://${KB_HOST}:${KB_PORT}`;
+}
+
 function apiBase() {
   const b = import.meta.env.VITE_KB_API_URL;
   if (b && String(b).trim()) return String(b).replace(/\/$/, "");
+  if (typeof window !== "undefined" && window.electronAPI) {
+    return directKbBase();
+  }
   if (typeof window !== "undefined" && window.location?.protocol === "file:") {
-    return "http://127.0.0.1:3847";
+    return directKbBase();
   }
   return "";
 }
@@ -27,9 +38,33 @@ export async function kbFetch(path, options = {}) {
 }
 
 export async function kbHealth() {
-  const r = await kbFetch("/api/health");
-  if (!r.ok) return { ok: false, pg: false, embedding: false, ollama: false };
-  return r.json();
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 10000);
+  try {
+    const r = await kbFetch("/api/health", { signal: ac.signal });
+    if (!r.ok) {
+      let error = `HTTP ${r.status}`;
+      try {
+        const j = await r.json();
+        if (j.error) error = j.error;
+      } catch {
+        /* ignore */
+      }
+      return { ok: false, pg: false, embedding: false, ollama: false, error };
+    }
+    return r.json();
+  } catch (e) {
+    const msg = String(e.message || e);
+    const hint =
+      msg.includes("abort") || msg.includes("Abort")
+        ? "连接超时：请确认已运行 npm run kb:pg 与 npm run kb:serve"
+        : msg.includes("Failed to fetch") || msg.includes("NetworkError")
+          ? "无法连接 kb-server：请在 md-reader-app 目录执行 npm run kb:serve"
+          : msg;
+    return { ok: false, pg: false, embedding: false, ollama: false, error: hint };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function kbGetTree() {

@@ -1776,7 +1776,9 @@ function App() {
           {files.length === 0 && (
             <p className="hint">
               支持 `.md` 和 `.mdc`
-              {!hasApi ? "（当前是浏览器模式）" : ""}
+              {!hasApi
+                ? "。当前在浏览器中打开，只能上传文件夹；请关闭此页，在项目目录运行 npm run dev，使用弹出的 Electron 桌面窗口并点「打开文件夹」选本地目录。"
+                : ""}
             </p>
           )}
           {Object.keys(groupedFiles)

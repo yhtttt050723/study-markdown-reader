@@ -115,3 +115,63 @@ export function insertCodeFenceAtSelection(body, start, end, lang) {
   const caret = start + lead.length + caretInside;
   return { nextBody, caret };
 }
+
+/**
+ * 包裹选区，无选区时插入占位符并将光标置于占位符开头。
+ */
+export function insertWrapAtSelection(body, start, end, before, after, placeholder = "") {
+  const b = String(body || "");
+  const s = Math.max(0, Math.min(start, b.length));
+  const e = Math.max(s, Math.min(end, b.length));
+  const selected = b.slice(s, e);
+  const inner = selected || placeholder;
+  const insertText = before + inner + after;
+  const { nextBody } = replaceSelection(b, s, e, insertText);
+  const caret = selected ? s + insertText.length : s + before.length;
+  return { nextBody, caret };
+}
+
+/**
+ * @param {number} level 1–6
+ */
+export function insertHeadingAtSelection(body, start, end, level, placeholder = "标题") {
+  const lv = Math.min(6, Math.max(1, Number(level) || 2));
+  const hashes = "#".repeat(lv);
+  const lead = leadingNewlineIfNeeded(body, start);
+  const insertText = `${lead}${hashes} ${placeholder}\n\n`;
+  const { nextBody } = replaceSelection(body, start, end, insertText);
+  const caret = start + lead.length + hashes.length + 1;
+  return { nextBody, caret };
+}
+
+export function insertLinkAtSelection(body, start, end, label, url) {
+  const text = String(label || "链接文字").trim() || "链接文字";
+  const href = String(url || "https://").trim() || "https://";
+  const insertText = `[${text}](${href})`;
+  const { nextBody, caret } = replaceSelection(body, start, end, insertText);
+  return { nextBody, caret };
+}
+
+export function insertImageMarkdownAtSelection(body, start, end, alt, src) {
+  const lead = leadingNewlineIfNeeded(body, start);
+  const a = String(alt || "图片").trim() || "图片";
+  const u = String(src || "").trim();
+  const insertText = `${lead}![${a}](${u})\n`;
+  const { nextBody, caret } = replaceSelection(body, start, end, insertText);
+  return { nextBody, caret };
+}
+
+export function insertLinePrefixAtSelection(body, start, end, prefix, placeholder = "内容") {
+  const lead = leadingNewlineIfNeeded(body, start);
+  const insertText = `${lead}${prefix}${placeholder}\n`;
+  const { nextBody } = replaceSelection(body, start, end, insertText);
+  const caret = start + lead.length + prefix.length;
+  return { nextBody, caret };
+}
+
+export function insertHorizontalRuleAtSelection(body, start, end) {
+  const lead = leadingNewlineIfNeeded(body, start);
+  const insertText = `${lead}---\n\n`;
+  const { nextBody, caret } = replaceSelection(body, start, end, insertText);
+  return { nextBody, caret };
+}

@@ -41,6 +41,8 @@ npm install
 npm run dev
 ```
 
+`npm run dev` 会同时启动 Vite，并**自动打开 Electron 桌面窗口**（本地选文件夹，无需每次上传到网页）。请勿把 `http://localhost:5210` 当主入口；仅调试前端时用 `npm run dev:web`。
+
 知识库 **仅按本机** 使用即可：`Docker`（Postgres **5433**）+ **`kb-server`**（默认 **3847**）。开发时 **`VITE_KB_API_URL` 不必设置**，由 Vite 把 **`/api`** 代理到 `http://127.0.0.1:3847`。打包后的 exe 从本机打开时，会默认请求同一地址（需你已在本机启动 `kb-server`）。
 
 ## 个人知识库（PostgreSQL + pgvector，本机）

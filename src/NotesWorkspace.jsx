@@ -3,6 +3,8 @@ import { marked } from "marked";
 import { localImageProtocolUrlFromRaw } from "./markdownQuiz.js";
 import {
   newNoteId,
+  coerceUpdatedAt,
+  normalizeNotesState,
   readQuickNotesState,
   writeQuickNotesState,
 } from "./quickNotes.js";
@@ -15,9 +17,14 @@ import {
 } from "./storageKeys.js";
 import { mergeQuizWrongIntoQuickNotes } from "./quizNotesSync.js";
 import {
-  extractH2Outline,
   insertCodeFenceAtSelection,
+  insertHeadingAtSelection,
+  insertHorizontalRuleAtSelection,
+  insertImageMarkdownAtSelection,
+  insertLinePrefixAtSelection,
+  insertLinkAtSelection,
   insertSubjectBlockAtSelection,
+  insertWrapAtSelection,
   leadingNewlineIfNeeded,
   NOTE_CODE_FENCE_LANGS,
   NOTE_SUBJECT_BLOCK_PRESETS,
@@ -33,6 +40,19 @@ import {
   kbRefineNote,
   kbSuggestTagsFromOllama,
 } from "./kbApi.js";
+
+function formatNoteTime(updatedAt) {
+  const s =
+    updatedAt instanceof Date
+      ? updatedAt.toISOString()
+      : typeof updatedAt === "string"
+        ? updatedAt
+        : updatedAt != null
+          ? String(updatedAt)
+          : "";
+  if (!s) return "";
+  return s.slice(0, 16).replace("T", " ");
+}
 
 function firstLineTitle(body) {
   const line = String(body || "")
@@ -82,6 +102,8 @@ export function NotesWorkspace({ onBack }) {
   const [preview, setPreview] = useState(false);
   const [panel, setPanel] = useState("edit");
   const [kbOk, setKbOk] = useState(null);
+  const [kbError, setKbError] = useState("");
+  const [kbRemoteCount, setKbRemoteCount] = useState(0);
   const [kbEmbed, setKbEmbed] = useState(false);
   const [kbOllama, setKbOllama] = useState(false);
   const [kbOllamaModel, setKbOllamaModel] = useState("");
@@ -120,22 +142,28 @@ export function NotesWorkspace({ onBack }) {
   const refreshKbMeta = useCallback(async () => {
     try {
       const h = await kbHealth();
-      setKbOk(Boolean(h.ok && h.pg));
+      const online = Boolean(h.ok && h.pg);
+      setKbOk(online);
+      setKbError(online ? "" : h.error || "知识库未就绪");
       setKbEmbed(Boolean(h.embedding));
       setKbOllama(Boolean(h.ollama));
       setKbOllamaModel(typeof h.ollamaModel === "string" ? h.ollamaModel : "");
-      if (h.ok && h.pg) {
-        const t = await kbGetTree();
+      if (online) {
+        const [t, notesRes] = await Promise.all([kbGetTree(), kbGetNotes()]);
         setTreeRemote(t.tree || []);
+        setKbRemoteCount(Array.isArray(notesRes.notes) ? notesRes.notes.length : 0);
       } else {
         setTreeRemote(null);
+        setKbRemoteCount(0);
       }
-    } catch {
+    } catch (e) {
       setKbOk(false);
+      setKbError(String(e.message || e));
       setKbEmbed(false);
       setKbOllama(false);
       setKbOllamaModel("");
       setTreeRemote(null);
+      setKbRemoteCount(0);
     }
   }, []);
 
@@ -143,10 +171,11 @@ export function NotesWorkspace({ onBack }) {
     refreshKbMeta();
   }, [refreshKbMeta]);
 
-  const active = useMemo(
-    () => state.notes.find((n) => n.id === state.activeId) ?? null,
-    [state.notes, state.activeId]
-  );
+  const active = useMemo(() => {
+    const aid = state.activeId != null ? String(state.activeId) : null;
+    if (!aid) return null;
+    return state.notes.find((n) => String(n.id) === aid) ?? null;
+  }, [state.notes, state.activeId]);
 
   const treeData = useMemo(() => {
     if (treeRemote && treeRemote.length > 0) return treeRemote;
@@ -154,7 +183,11 @@ export function NotesWorkspace({ onBack }) {
   }, [treeRemote, state.notes]);
 
   const filteredNotes = useMemo(() => {
-    let list = state.notes.slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    let list = state.notes
+      .slice()
+      .sort((a, b) =>
+        coerceUpdatedAt(b.updatedAt).localeCompare(coerceUpdatedAt(a.updatedAt)),
+      );
     if (filterL1) list = list.filter((n) => (n.tagL1 || "未分类") === filterL1);
     if (filterL2) list = list.filter((n) => (n.tagL2 || "未分类") === filterL2);
     return list;
@@ -162,9 +195,11 @@ export function NotesWorkspace({ onBack }) {
 
   const patchActive = useCallback((patch) => {
     setState((prev) => {
+      const aid = prev.activeId != null ? String(prev.activeId) : null;
+      if (!aid) return prev;
       const now = new Date().toISOString();
       const notes = prev.notes.map((n) =>
-        n.id === prev.activeId ? { ...n, ...patch, updatedAt: now } : n
+        String(n.id) === aid ? { ...n, ...patch, updatedAt: now } : n
       );
       return { ...prev, notes };
     });
@@ -172,9 +207,11 @@ export function NotesWorkspace({ onBack }) {
 
   const updateActiveBody = useCallback((body) => {
     setState((prev) => {
+      const aid = prev.activeId != null ? String(prev.activeId) : null;
+      if (!aid) return prev;
       const now = new Date().toISOString();
       const notes = prev.notes.map((n) =>
-        n.id === prev.activeId
+        String(n.id) === aid
           ? {
               ...n,
               body,
@@ -187,10 +224,13 @@ export function NotesWorkspace({ onBack }) {
     });
   }, []);
 
-  const h2Outline = useMemo(
-    () => extractH2Outline(active?.body ?? ""),
-    [active?.body]
-  );
+  const splitPreviewHtml = useMemo(() => {
+    try {
+      return marked.parse(active?.body ?? "");
+    } catch {
+      return "<p>预览解析失败</p>";
+    }
+  }, [active?.body]);
 
   useLayoutEffect(() => {
     const caret = insertCaretRef.current;
@@ -239,26 +279,42 @@ export function NotesWorkspace({ onBack }) {
     [active, preview, panel, getEditorSelection, updateActiveBody]
   );
 
-  const jumpToOutlineHeading = useCallback(
-    (charStart) => {
+  const applyInsert = useCallback(
+    (fn) => {
       if (!active || preview || panel !== "edit") return;
-      const ta = textareaRef.current;
-      if (!ta) return;
-      const c = Math.min(Math.max(0, charStart), ta.value.length);
-      ta.focus();
-      requestAnimationFrame(() => {
-        ta.setSelectionRange(c, c);
-        try {
-          const line = ta.value.slice(0, c).split(/\r?\n/).length;
-          const lh = parseFloat(getComputedStyle(ta).lineHeight) || 22;
-          ta.scrollTop = Math.max(0, (line - 3) * lh);
-        } catch {
-          /* ignore */
-        }
-      });
+      const body = active.body ?? "";
+      const { start, end } = getEditorSelection();
+      const { nextBody, caret } = fn(body, start, end);
+      insertCaretRef.current = caret;
+      updateActiveBody(nextBody);
     },
-    [active, preview, panel]
+    [active, preview, panel, getEditorSelection, updateActiveBody]
   );
+
+  const insertLink = useCallback(() => {
+    if (!active || preview || panel !== "edit") return;
+    const body = active.body ?? "";
+    const { start, end } = getEditorSelection();
+    const selected = body.slice(start, end).trim();
+    const url = window.prompt("链接地址（https://…）", "https://");
+    if (url === null) return;
+    const label = window.prompt("显示文字", selected || url);
+    if (label === null) return;
+    const { nextBody, caret } = insertLinkAtSelection(body, start, end, label, url);
+    insertCaretRef.current = caret;
+    updateActiveBody(nextBody);
+  }, [active, preview, panel, getEditorSelection, updateActiveBody]);
+
+  const insertImageLink = useCallback(() => {
+    if (!active || preview || panel !== "edit") return;
+    const url = window.prompt("图片路径或 URL（桌面版也可直接 Ctrl+V 粘贴截图）", "");
+    if (url === null || !String(url).trim()) return;
+    const alt = window.prompt("图片说明", "图片");
+    if (alt === null) return;
+    applyInsert((body, start, end) =>
+      insertImageMarkdownAtSelection(body, start, end, alt, String(url).trim()),
+    );
+  }, [active, preview, panel, applyInsert]);
 
   const startNotesOutlineResize = useCallback((e) => {
     e.preventDefault();
@@ -399,22 +455,26 @@ export function NotesWorkspace({ onBack }) {
     setKbBusy(true);
     try {
       const { notes } = await kbGetNotes();
-      const mapped = notes.map((n) => ({
-        id: n.id,
-        title: n.title,
-        body: n.body,
-        updatedAt: n.updatedAt || new Date().toISOString(),
-        tagL1: n.tagL1 || "未分类",
-        tagL2: n.tagL2 || "未分类",
-        importance: n.importance ?? 3,
-        keywords: n.keywords || [],
-        vectorCluster: n.vectorCluster || "",
-      }));
-      setState({
-        notes: mapped,
-        activeId: mapped[0]?.id ?? null,
+      const next = normalizeNotesState({
+        notes: Array.isArray(notes) ? notes : [],
+        activeId: notes?.[0]?.id,
       });
-      setRefineHint({ ok: "已从知识库拉取。" });
+      if (next.notes.length === 0) {
+        setRefineHint({ err: "知识库中没有可导入的笔记。" });
+        return;
+      }
+      setState(next);
+      writeQuickNotesState(next);
+      setPreview(false);
+      setPanel("edit");
+      setFilterL1(null);
+      setFilterL2(null);
+      setRefineHint({
+        ok: `已从知识库拉取 ${next.notes.length} 条。请在「编辑」标签下修改正文（勿停留在「预览」）。`,
+      });
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+      });
     } catch (e) {
       setRefineHint({ err: String(e.message || e) });
     } finally {
@@ -491,7 +551,25 @@ export function NotesWorkspace({ onBack }) {
         <div className="notes-kb-status">
           {kbOk === null && <span className="notes-kb-pill">知识库检测中…</span>}
           {kbOk === false && (
-            <span className="notes-kb-pill notes-kb-pill--off">知识库离线（仅本地 smr-quick-notes）</span>
+            <>
+              <span className="notes-kb-pill notes-kb-pill--off">知识库离线（仅本地 smr-quick-notes）</span>
+              {kbError ? (
+                <span className="notes-kb-msg notes-kb-msg--err" title={kbError}>
+                  {kbError.length > 72 ? `${kbError.slice(0, 72)}…` : kbError}
+                </span>
+              ) : null}
+            </>
+          )}
+          {kbOk && kbRemoteCount > 0 && (
+            <button
+              type="button"
+              className="topbar-btn topbar-btn--primary"
+              disabled={kbBusy}
+              onClick={pullFromKb}
+              title="PostgreSQL 中的笔记不会自动显示在左侧列表，需拉取到本机"
+            >
+              从知识库拉取（{kbRemoteCount} 条）
+            </button>
           )}
           {kbOk && (
             <span className="notes-kb-pill notes-kb-pill--on">
@@ -626,7 +704,8 @@ export function NotesWorkspace({ onBack }) {
               tree={treeData}
               activeId={state.activeId}
               onPickNote={(id) => {
-                setState((p) => ({ ...p, activeId: id }));
+                setState((p) => ({ ...p, activeId: String(id) }));
+                setPreview(false);
                 setPanel("edit");
                 setRefineHint(null);
               }}
@@ -660,9 +739,10 @@ export function NotesWorkspace({ onBack }) {
               <li key={n.id}>
                 <button
                   type="button"
-                  className={n.id === state.activeId ? "active" : ""}
+                  className={String(n.id) === String(state.activeId) ? "active" : ""}
                   onClick={() => {
-                    setState((p) => ({ ...p, activeId: n.id }));
+                    setState((p) => ({ ...p, activeId: String(n.id) }));
+                    setPreview(false);
                     setRefineHint(null);
                   }}
                 >
@@ -671,7 +751,7 @@ export function NotesWorkspace({ onBack }) {
                     {(n.tagL1 || "未分类")} › {(n.tagL2 || "未分类")}
                   </span>
                   <span className="notes-item-time">
-                    {n.updatedAt.slice(0, 16).replace("T", " ")}
+                    {formatNoteTime(n.updatedAt)}
                   </span>
                 </button>
               </li>
@@ -753,22 +833,154 @@ export function NotesWorkspace({ onBack }) {
 
           <div className="notes-workspace-editor">
             {!active ? (
-              <p className="hint">暂无笔记，点击「新建」。</p>
+              <p className="hint">
+                {state.notes.length > 0
+                  ? "请从左侧列表点选一条笔记后再编辑。"
+                  : "暂无笔记，点击「新建」。"}
+              </p>
             ) : panel === "edit" && preview ? (
-              <div
-                className="markdown notes-preview-pane"
-                dangerouslySetInnerHTML={{
-                  __html: marked.parse(active.body || ""),
-                }}
-              />
+              <>
+                <p className="notes-kb-msg notes-kb-msg--err" style={{ margin: "0 0 8px", flexShrink: 0 }}>
+                  当前为「预览」模式，正文不可改。点顶栏「编辑」回到输入。
+                </p>
+                <div
+                  className="markdown notes-preview-pane"
+                  dangerouslySetInnerHTML={{
+                    __html: marked.parse(active.body || ""),
+                  }}
+                />
+              </>
             ) : panel === "edit" ? (
               <>
                 <div className="notes-insert-toolbar" aria-label="插入 Markdown 片段">
-                  <span className="notes-insert-toolbar-title">方案 A · 分块</span>
                   <span className="notes-insert-hint">
-                    以 <code>##</code> 为块界；插入 <code>## 📌 科目</code> 与代码围栏。中间竖条可拖动调整编辑区与大纲比例（记在{" "}
-                    <code>smr-notes-editor-ratio</code>）。桌面版可在编辑区 <strong>Ctrl+V</strong> 粘贴截图。
+                    快捷插入 · 右侧实时预览 · 桌面版 <strong>Ctrl+V</strong> 可直接粘贴截图
                   </span>
+                  <div className="notes-insert-group" role="group" aria-label="标题">
+                    <span className="notes-insert-group-label">标题</span>
+                    <button
+                      type="button"
+                      className="notes-insert-btn"
+                      title="二级标题 ##"
+                      onClick={() => applyInsert((b, s, e) => insertHeadingAtSelection(b, s, e, 2, "标题"))}
+                    >
+                      H2
+                    </button>
+                    <button
+                      type="button"
+                      className="notes-insert-btn"
+                      title="三级标题 ###"
+                      onClick={() => applyInsert((b, s, e) => insertHeadingAtSelection(b, s, e, 3, "标题"))}
+                    >
+                      H3
+                    </button>
+                    <button
+                      type="button"
+                      className="notes-insert-btn"
+                      title="四级标题 ####"
+                      onClick={() => applyInsert((b, s, e) => insertHeadingAtSelection(b, s, e, 4, "标题"))}
+                    >
+                      H4
+                    </button>
+                  </div>
+                  <div className="notes-insert-group" role="group" aria-label="文字样式">
+                    <span className="notes-insert-group-label">样式</span>
+                    <button
+                      type="button"
+                      className="notes-insert-btn"
+                      title="加粗 **文字**"
+                      onClick={() =>
+                        applyInsert((b, s, e) => insertWrapAtSelection(b, s, e, "**", "**", "加粗"))
+                      }
+                    >
+                      <strong>B</strong>
+                    </button>
+                    <button
+                      type="button"
+                      className="notes-insert-btn"
+                      title="斜体 *文字*"
+                      onClick={() =>
+                        applyInsert((b, s, e) => insertWrapAtSelection(b, s, e, "*", "*", "斜体"))
+                      }
+                    >
+                      <em>I</em>
+                    </button>
+                    <button
+                      type="button"
+                      className="notes-insert-btn"
+                      title="行内代码"
+                      onClick={() =>
+                        applyInsert((b, s, e) => insertWrapAtSelection(b, s, e, "`", "`", "code"))
+                      }
+                    >
+                      {"</>"}
+                    </button>
+                    <button
+                      type="button"
+                      className="notes-insert-btn"
+                      title="删除线"
+                      onClick={() =>
+                        applyInsert((b, s, e) => insertWrapAtSelection(b, s, e, "~~", "~~", "删除"))
+                      }
+                    >
+                      S̶
+                    </button>
+                  </div>
+                  <div className="notes-insert-group" role="group" aria-label="块与列表">
+                    <span className="notes-insert-group-label">块</span>
+                    <button
+                      type="button"
+                      className="notes-insert-btn"
+                      title="引用"
+                      onClick={() =>
+                        applyInsert((b, s, e) => insertLinePrefixAtSelection(b, s, e, "> ", "引用"))
+                      }
+                    >
+                      引用
+                    </button>
+                    <button
+                      type="button"
+                      className="notes-insert-btn"
+                      title="无序列表"
+                      onClick={() =>
+                        applyInsert((b, s, e) => insertLinePrefixAtSelection(b, s, e, "- ", "列表项"))
+                      }
+                    >
+                      列表
+                    </button>
+                    <button
+                      type="button"
+                      className="notes-insert-btn"
+                      title="有序列表"
+                      onClick={() =>
+                        applyInsert((b, s, e) => insertLinePrefixAtSelection(b, s, e, "1. ", "列表项"))
+                      }
+                    >
+                      1.
+                    </button>
+                    <button
+                      type="button"
+                      className="notes-insert-btn"
+                      title="分隔线 ---"
+                      onClick={() => applyInsert(insertHorizontalRuleAtSelection)}
+                    >
+                      ─
+                    </button>
+                  </div>
+                  <div className="notes-insert-group" role="group" aria-label="链接与图片">
+                    <span className="notes-insert-group-label">链接</span>
+                    <button type="button" className="notes-insert-btn" title="插入链接" onClick={insertLink}>
+                      链接
+                    </button>
+                    <button
+                      type="button"
+                      className="notes-insert-btn"
+                      title="插入图片 Markdown；截图请 Ctrl+V"
+                      onClick={insertImageLink}
+                    >
+                      图片
+                    </button>
+                  </div>
                   <label className="notes-insert-field">
                     <span>科目块</span>
                     <select
@@ -823,14 +1035,13 @@ export function NotesWorkspace({ onBack }) {
                     style={{ flex: `${notesEditorRatio} 1 0%` }}
                   >
                     <textarea
+                      key={state.activeId}
                       ref={textareaRef}
                       className="notes-textarea notes-textarea--in-split"
                       value={active.body ?? ""}
                       onChange={(e) => updateActiveBody(e.target.value)}
                       onPaste={handleNoteImagePaste}
-                      placeholder={
-                        "支持 Markdown。用「科目块」插入 ## 📌 标题；拖中间竖条调比例；右侧大纲可点击跳转；桌面版可粘贴截图。"
-                      }
+                      placeholder={"支持 Markdown。左侧编辑，右侧实时预览；桌面版可粘贴截图。"}
                       spellCheck={false}
                     />
                   </div>
@@ -838,33 +1049,19 @@ export function NotesWorkspace({ onBack }) {
                     className="layout-gutter layout-gutter-split"
                     role="separator"
                     aria-orientation="vertical"
-                    aria-label="调整编辑区与块大纲比例"
+                    aria-label="调整编辑区与预览比例"
                     onMouseDown={startNotesOutlineResize}
                   />
                   <aside
-                    className="notes-block-outline"
+                    className="notes-split-preview"
                     style={{ flex: `${1 - notesEditorRatio} 1 0%` }}
-                    aria-label="二级标题大纲"
+                    aria-label="Markdown 预览"
                   >
-                    <div className="notes-block-outline-h">块大纲</div>
-                    {h2Outline.length === 0 ? (
-                      <p className="notes-block-outline-empty">暂无 <code>##</code> 标题</p>
-                    ) : (
-                      <ul className="notes-block-outline-list">
-                        {h2Outline.map((h) => (
-                          <li key={`${h.charStart}-${h.title}`}>
-                            <button
-                              type="button"
-                              className="notes-block-outline-btn"
-                              onClick={() => jumpToOutlineHeading(h.charStart)}
-                              title={`跳转到：${h.title}`}
-                            >
-                              {h.title}
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
+                    <div className="notes-split-preview-h">预览</div>
+                    <div
+                      className="markdown notes-preview-pane notes-preview-pane--split"
+                      dangerouslySetInnerHTML={{ __html: splitPreviewHtml }}
+                    />
                   </aside>
                 </div>
               </>

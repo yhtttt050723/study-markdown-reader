@@ -7,7 +7,7 @@ import {
   suggestTagsFromNote,
 } from "./ollama.mjs";
 
-const PORT = Number(process.env.KB_PORT || 3847);
+const PORT = Number(process.env.KB_PORT || 5214);
 const OPENAI_KEY = process.env.OPENAI_API_KEY || "";
 const EMBED_MODEL = process.env.OPENAI_EMBED_MODEL || "text-embedding-3-small";
 
