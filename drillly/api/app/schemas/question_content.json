@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["type", "stem"],
+  "properties": {
+    "type": { "enum": ["single_choice", "multiple_choice", "coding"] },
+    "title": { "type": "string" },
+    "stem": { "type": "string" },
+    "options": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["key", "content"],
+        "properties": {
+          "key": { "type": "string" },
+          "content": { "type": "string" }
+        }
+      }
+    },
+    "answer": { "type": "array", "items": { "type": "string" } },
+    "explanation": { "type": "string" },
+    "language": { "enum": ["python", "java", "c", "cpp"] },
+    "metadata": { "type": "object" }
+  }
+}

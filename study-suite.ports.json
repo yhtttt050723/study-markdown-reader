@@ -1,0 +1,8 @@
+{
+  "comment": "Study 工作台端口（由 启动Study.ps1 读取；冲突时自动尝试 fallbacks）",
+  "mdReader": { "vite": 5210, "fallbacks": [5215, 5220], "label": "Study Markdown Reader" },
+  "videoDash": { "vite": 5211, "fallbacks": [5216, 5221], "label": "video-dash · B站进度" },
+  "drilllyWeb": { "vite": 5212, "fallbacks": [5217, 5222], "label": "Drillly 做题本" },
+  "drilllyApi": { "http": 5213, "fallbacks": [5218, 5223], "label": "Drillly API" },
+  "kbServer": { "http": 5214, "fallbacks": [5219, 5224], "label": "知识库 kb-server" }
+}

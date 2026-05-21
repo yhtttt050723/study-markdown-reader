@@ -1,0 +1,22 @@
+# 子项目独立仓库（见 study-markdown-reader）
+/md-reader-app/
+
+# 依赖与构建
+node_modules/
+**/node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# 运行时生成
+study-suite-launch.log
+study-suite.resolved.json
+
+# 密钥
+.env
+.env.*
+
+# 系统
+Thumbs.db
+.DS_Store
+desktop.ini
