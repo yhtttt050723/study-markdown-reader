@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.config import settings as app_settings
 from app.database import init_db
@@ -34,6 +35,12 @@ app.include_router(import_pdf.router)
 app.include_router(runner.router)
 app.include_router(settings_router.router)
 app.include_router(sync.router)
+
+app.mount(
+    "/api/media",
+    StaticFiles(directory=app_settings.media_dir),
+    name="media",
+)
 
 
 @app.get("/api/health/")

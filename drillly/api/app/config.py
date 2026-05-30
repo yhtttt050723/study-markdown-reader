@@ -24,10 +24,12 @@ class Settings(BaseSettings):
     deepseek_api_key: str = ""
     llm_default_provider: str = "mock"
     tongyi_model: str = "qwen-plus"
+    tongyi_vision_model: str = "qwen-vl-max"
     deepseek_model: str = "deepseek-chat"
+    pdf_vision_text_threshold: int = 150
 
-    pdf_max_mb: int = 20
-    pdf_default_pages_per_batch: int = 5
+    pdf_max_mb: int = 80
+    pdf_default_pages_per_batch: int = 2
     runner_timeout_sec: int = 10
     mingw_bin: str = ""
 

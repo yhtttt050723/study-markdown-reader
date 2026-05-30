@@ -63,6 +63,7 @@ class QuestionCreate(BaseModel):
 
 
 class QuestionPatch(BaseModel):
+    type: str | None = None
     category_id: int | None = None
     content: dict[str, Any] | None = None
     tag_ids: list[int] | None = None

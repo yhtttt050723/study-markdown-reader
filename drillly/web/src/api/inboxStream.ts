@@ -21,6 +21,31 @@ export type InboxStreamEvent =
       batch_total: number
       questions: number
       pdf_tag?: string
+      extract_mode?: string
+      text_chars?: number
+      zero_hint?: string
+      questions_in_db?: number
+    }
+  | {
+      type: 'batch_error'
+      file: string
+      batch_index: number
+      batch_total: number
+      error: string
+      page_start?: number
+      page_end?: number
+      retry?: boolean
+    }
+  | {
+      type: 'retry_plan'
+      file: string
+      batches: number
+      batch_indices?: number[]
+    }
+  | {
+      type: 'retry_done'
+      file: string
+      questions_added: number
     }
   | { type: 'file_done'; file: string; result: InboxProcessResult['results'][0] }
   | { type: 'file_error'; file: string; error: string }
@@ -43,12 +68,13 @@ function parseSseChunk(buffer: string): { events: InboxStreamEvent[]; rest: stri
   return { events, rest }
 }
 
-export async function streamInboxProcessAll(
-  body: InboxProcessBody,
+async function streamInbox(
+  url: string,
+  body: Record<string, unknown>,
   onEvent: (ev: InboxStreamEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const r = await fetch('/api/import/inbox/process-all/stream/', {
+  const r = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -75,6 +101,33 @@ export async function streamInboxProcessAll(
     const parsed = parseSseChunk(buf + '\n\n')
     for (const ev of parsed.events) onEvent(ev)
   }
+}
+
+export async function streamInboxProcessAll(
+  body: InboxProcessBody,
+  onEvent: (ev: InboxStreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return streamInbox('/api/import/inbox/process-all/stream/', body, onEvent, signal)
+}
+
+/** 单文件流式导入；`filename` 在请求体中必填（见 InboxProcessBody） */
+export type InboxProcessOneBody = InboxProcessBody
+
+export async function streamInboxProcessOne(
+  body: InboxProcessOneBody,
+  onEvent: (ev: InboxStreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return streamInbox('/api/import/inbox/process-one/stream/', body, onEvent, signal)
+}
+
+export async function streamInboxRetryFailed(
+  body: InboxProcessOneBody,
+  onEvent: (ev: InboxStreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return streamInbox('/api/import/inbox/retry-failed/stream/', body, onEvent, signal)
 }
 
 export function inboxStreamPercent(

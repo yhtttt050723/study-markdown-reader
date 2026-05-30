@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.models import Question, Submission
@@ -55,10 +55,15 @@ def backfill_source_tags(db: Session = Depends(get_db)):
     from app.services.pdf_source_tag import ensure_pdf_source_tag
     from app.services.question_tags import attach_tags
 
-    rows = db.query(Question).all()
+    rows = (
+        db.query(Question)
+        .filter(Question.source_pdf != "")
+        .options(joinload(Question.tags))
+        .all()
+    )
     updated = 0
     for q in rows:
-        name = source_pdf_from_content(q.content)
+        name = (q.source_pdf or "").strip() or source_pdf_from_content(q.content)
         if not name:
             continue
         tag = ensure_pdf_source_tag(db, name)
@@ -88,6 +93,7 @@ def list_practice_questions(
     category: str | None = None,
     type: str | None = Query(None, alias="type"),
     source_pdf: str | None = None,
+    search: str | None = Query(None, max_length=200, description="题干/选项部分文字"),
     practice_round: int | None = Query(None, ge=1, le=2),
     round_status: str | None = Query(None, pattern="^(pending|done)$"),
     order: str = Query("id", pattern="^(id|random)$"),
@@ -100,6 +106,7 @@ def list_practice_questions(
         category=category,
         q_type=type,
         source_pdf=source_pdf,
+        search=search,
         practice_round=practice_round,
         round_status=round_status,
         order=order,
@@ -176,13 +183,19 @@ def export_markdown(
     category: str | None = None,
     type: str | None = None,
     source_pdf: str | None = None,
+    search: str | None = Query(None, max_length=200),
     include_answers: bool = False,
     include_submissions: bool = True,
     format: str = Query("single", alias="format"),
     save_to_study: bool = False,
 ):
     questions = load_questions(
-        db, tags=tags, category=category, q_type=type, source_pdf=source_pdf
+        db,
+        tags=tags,
+        category=category,
+        q_type=type,
+        source_pdf=source_pdf,
+        search=search,
     )
     data, filename, media_type = build_export(
         db,

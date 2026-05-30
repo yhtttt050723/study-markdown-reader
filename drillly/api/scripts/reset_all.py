@@ -22,10 +22,21 @@ LEDGER = API_ROOT / "data" / "inbox_imported.json"
 MEDIA_IMPORTS = API_ROOT / "data" / "media" / "imports"
 
 
+def _unlink_db() -> None:
+    for path in (DB, DB.with_suffix(".db-wal"), DB.with_suffix(".db-shm")):
+        if path.exists():
+            try:
+                path.unlink()
+                print(f"已删除: {path.name}")
+            except PermissionError as e:
+                raise PermissionError(
+                    f"{path} 仍被占用。请先关闭 Drillly API 窗口，或运行 reset-db.bat（会自动结束 5213 端口进程）。"
+                ) from e
+
+
 def main() -> None:
-    if DB.exists():
-        DB.unlink()
-        print(f"已删除数据库: {DB}")
+    if DB.exists() or DB.with_suffix(".db-wal").exists():
+        _unlink_db()
     else:
         print("数据库不存在，跳过")
 

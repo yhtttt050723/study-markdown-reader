@@ -11,7 +11,21 @@ from app.database import get_db
 from app.models import PdfImportBatch, PdfImportTask, Question, Tag
 from app.schemas.api_models import ParseBatchBody, ProviderOut
 from app.services.llm import list_providers, parse_pdf_batch
-from app.services.pdf_inbox import iter_inbox_process_all, list_inbox_pdfs, process_all_inbox
+from app.services.import_cancel import clear_cancel, request_cancel
+from app.services.import_job import clear_job, get_job_state
+from app.services.inbox_reset import reset_inbox_pdf
+from app.services.import_batch_failures import count_pending_by_file, list_all_pending
+from app.services.import_job import finish_job, start_job
+from app.services.pdf_inbox import (
+    ImportCancelledError,
+    _mirror_event_to_job,
+    iter_inbox_process_all,
+    iter_inbox_process_one,
+    iter_retry_failed_batches,
+    list_inbox_pdfs,
+    process_all_inbox,
+)
+from app.database import SessionLocal
 from app.services.question_tags import attach_tags, merge_task_pdf_tag, tag_ids_for_question
 from app.tools.split_pdf import split_pdf
 from pydantic import BaseModel
@@ -25,6 +39,14 @@ class InboxProcessBody(BaseModel):
     tags: str = ""
     pages_per_batch: int = 5
     auto_confirm: bool = True
+
+
+class InboxFileBody(BaseModel):
+    filename: str
+
+
+class InboxProcessOneBody(InboxProcessBody):
+    filename: str
 
 
 @router.get("/providers/", response_model=list[ProviderOut])
@@ -226,11 +248,37 @@ def confirm_batch(task_id: int, bid: int, db: Session = Depends(get_db)):
 
 
 @router.get("/inbox/")
-async def get_inbox():
-    pdfs = await list_inbox_pdfs()
+async def get_inbox(db: Session = Depends(get_db)):
+    pdfs = await list_inbox_pdfs(db)
     from app.services.settings_store import get_pdf_inbox_dir
 
     return {"inbox_dir": str(get_pdf_inbox_dir()), "files": pdfs}
+
+
+@router.get("/inbox/job-state/")
+def inbox_job_state():
+    return get_job_state()
+
+
+@router.post("/inbox/cancel/")
+def inbox_cancel():
+    request_cancel()
+    return {"ok": True, "message": "已请求取消，当前批次结束后停止"}
+
+
+@router.post("/inbox/clear-job/")
+def inbox_clear_job():
+    clear_job()
+    clear_cancel()
+    return {"ok": True}
+
+
+@router.post("/inbox/reset/")
+def inbox_reset_file(body: InboxFileBody, db: Session = Depends(get_db)):
+    try:
+        return reset_inbox_pdf(db, body.filename)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e)) from e
 
 
 @router.post("/inbox/process-all/")
@@ -249,20 +297,10 @@ async def inbox_process_all(body: InboxProcessBody, db: Session = Depends(get_db
         raise HTTPException(500, str(e)) from e
 
 
-@router.post("/inbox/process-all/stream/")
-async def inbox_process_all_stream(body: InboxProcessBody):
-    """SSE：批量导入进度（plan / file_start / batch_* / complete）。"""
-    tag_list = [t.strip() for t in body.tags.split(",") if t.strip()]
-
+def _sse_stream(events):
     async def event_stream():
         try:
-            async for event in iter_inbox_process_all(
-                provider=body.provider,
-                model=body.model,
-                tags=tag_list,
-                pages_per_batch=body.pages_per_batch,
-                auto_confirm=body.auto_confirm,
-            ):
+            async for event in events:
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception as e:
             err = {"type": "fatal", "error": str(e)}
@@ -277,3 +315,102 @@ async def inbox_process_all_stream(body: InboxProcessBody):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.post("/inbox/process-all/stream/")
+async def inbox_process_all_stream(body: InboxProcessBody):
+    """SSE：批量导入进度（plan / file_start / batch_* / complete）。"""
+    tag_list = [t.strip() for t in body.tags.split(",") if t.strip()]
+
+    return _sse_stream(
+        iter_inbox_process_all(
+            provider=body.provider,
+            model=body.model,
+            tags=tag_list,
+            pages_per_batch=body.pages_per_batch,
+            auto_confirm=body.auto_confirm,
+        )
+    )
+
+
+@router.post("/inbox/process-one/stream/")
+async def inbox_process_one_stream(body: InboxProcessOneBody):
+    """SSE：只处理收件箱中指定 PDF（可先 reset 再调用）。"""
+    tag_list = [t.strip() for t in body.tags.split(",") if t.strip()]
+    return _sse_stream(
+        iter_inbox_process_one(
+            body.filename,
+            provider=body.provider,
+            model=body.model,
+            tags=tag_list,
+            pages_per_batch=body.pages_per_batch,
+            auto_confirm=body.auto_confirm,
+        )
+    )
+
+
+@router.get("/inbox/failed-batches/")
+def inbox_failed_batches():
+    pending = list_all_pending()
+    return {
+        "pending": pending,
+        "count_by_file": count_pending_by_file(),
+        "total": len(pending),
+    }
+
+
+@router.post("/inbox/retry-failed/stream/")
+async def inbox_retry_failed_stream(body: InboxProcessOneBody):
+    """SSE：仅重导 import_batch_failures 中记录的失败批（不删已入库题）。"""
+    tag_list = [t.strip() for t in body.tags.split(",") if t.strip()]
+
+    async def events():
+        from app.services.import_cancel import clear_cancel
+
+        clear_cancel()
+        start_job(file_total=1, pending_files=0)
+        yield {"type": "plan", "total_files": 1, "pending_files": 0, "skipped_files": 0}
+        yield {
+            "type": "file_start",
+            "file": body.filename,
+            "file_index": 1,
+            "file_total": 1,
+        }
+
+        db = SessionLocal()
+        added = 0
+        try:
+            async for event in iter_retry_failed_batches(
+                db,
+                body.filename,
+                provider=body.provider,
+                model=body.model,
+                tags=tag_list,
+                auto_confirm=body.auto_confirm,
+            ):
+                _mirror_event_to_job(event, 1, 1)
+                if event.get("type") == "retry_done":
+                    added = event.get("questions_added", 0)
+                yield event
+        finally:
+            db.close()
+
+        finish_job(
+            summary={
+                "mode": "retry_failed",
+                "file": body.filename,
+                "questions_added": added,
+            }
+        )
+        yield {
+            "type": "complete",
+            "processed": 1,
+            "skipped": 0,
+            "results": [],
+            "skipped_files": [],
+            "errors": [],
+            "mode": "retry_failed",
+            "questions_added": added,
+        }
+
+    return _sse_stream(events())

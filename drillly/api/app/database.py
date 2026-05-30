@@ -26,5 +26,11 @@ def get_db() -> Generator[Session, None, None]:
 
 def init_db() -> None:
     from app import models  # noqa: F401
+    from app.services.question_index import (
+        backfill_question_index,
+        ensure_question_index_columns,
+    )
 
     Base.metadata.create_all(bind=engine)
+    ensure_question_index_columns()
+    backfill_question_index()

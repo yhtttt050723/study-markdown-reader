@@ -1,5 +1,5 @@
 def grade_answer(q_type: str, content: dict, answer: dict) -> tuple[float, bool]:
-    if q_type == "coding":
+    if q_type in ("coding", "subjective"):
         return 0.0, False
 
     expected = sorted(str(x).upper() for x in (content.get("answer") or []))

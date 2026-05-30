@@ -129,10 +129,8 @@ export function ScratchPad({ questionId }: { questionId: number | null }) {
       onBlur={() => setFocused(false)}
       tabIndex={0}
     >
-      <div style={{ padding: '0.5rem', fontSize: '0.85rem', fontWeight: 600 }}>
-        草稿画板
-      </div>
-      <div style={{ padding: '0 0.5rem 0.5rem', display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+      <div className="scratch-head">草稿画板</div>
+      <div className="scratch-tools">
         <input type="color" value={color} onChange={(e) => setColor(e.target.value)} title="颜色" />
         <input
           type="range"
@@ -142,21 +140,22 @@ export function ScratchPad({ questionId }: { questionId: number | null }) {
           onChange={(e) => setLineWidth(Number(e.target.value))}
           title="线宽"
         />
-        <button type="button" className="btn" onClick={() => setEraser(!eraser)}>
+        <button type="button" className="btn btn-sm" onClick={() => setEraser(!eraser)}>
           {eraser ? '画笔' : '橡皮'}
         </button>
-        <button type="button" className="btn" onClick={clear}>
+        <button type="button" className="btn btn-sm" onClick={clear}>
           清空
         </button>
       </div>
-      <canvas
-        ref={canvasRef}
-        style={{ flex: 1, width: '100%', touchAction: 'none', cursor: 'crosshair' }}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerLeave={onPointerUp}
-      />
+      <div className="scratch-canvas-wrap">
+        <canvas
+          ref={canvasRef}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerLeave={onPointerUp}
+        />
+      </div>
     </aside>
   )
 }

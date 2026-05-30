@@ -2,10 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, type ImportTask, type InboxFile, type InboxProcessResult } from '../api'
 import {
   inboxStreamPercent,
+  streamInboxProcessOne,
   streamInboxProcessAll,
+  streamInboxRetryFailed,
   type InboxStreamEvent,
 } from '../api/inboxStream'
 import { importZh as t } from '../i18n/importZh'
+
+const PROGRESS_STORAGE_KEY = 'drillly-import-progress-v1'
 
 type ImportProgress = {
   active: boolean
@@ -24,7 +28,7 @@ export function ImportPage() {
     { id: string; label: string; model: string; available?: boolean }[]
   >([])
   const [provider, setProvider] = useState('tongyi')
-  const [pagesPerBatch, setPagesPerBatch] = useState(5)
+  const [pagesPerBatch, setPagesPerBatch] = useState(2)
   const [pdfTags, setPdfTags] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [task, setTask] = useState<ImportTask | null>(null)
@@ -33,6 +37,7 @@ export function ImportPage() {
   const [msg, setMsg] = useState('')
   const [inboxDir, setInboxDir] = useState('')
   const [inboxFiles, setInboxFiles] = useState<InboxFile[]>([])
+  const [failedByFile, setFailedByFile] = useState<Record<string, number>>({})
   const [progress, setProgress] = useState<ImportProgress>({
     active: false,
     percent: 0,
@@ -52,6 +57,20 @@ export function ImportPage() {
       setInboxDir(r.inbox_dir)
       setInboxFiles(r.files)
     })
+    api.getFailedBatches().then((r) => {
+      setFailedByFile(r.count_by_file ?? {})
+    }).catch(() => setFailedByFile({}))
+  }, [])
+
+  const persistProgress = useCallback((p: ImportProgress) => {
+    try {
+      localStorage.setItem(
+        PROGRESS_STORAGE_KEY,
+        JSON.stringify({ ...p, active: p.active }),
+      )
+    } catch {
+      /* ignore quota */
+    }
   }, [])
 
   useEffect(() => {
@@ -60,7 +79,39 @@ export function ImportPage() {
       const tongyi = p.find((x) => x.id === 'tongyi')
       setProvider(tongyi?.available ? 'tongyi' : p[0]?.id || 'mock')
     })
+    api.getSettings().then((s) => {
+      if (s.pdf_pages_per_batch >= 1 && s.pdf_pages_per_batch <= 20) {
+        setPagesPerBatch(s.pdf_pages_per_batch)
+      }
+    })
     loadInbox()
+
+    try {
+      const raw = localStorage.getItem(PROGRESS_STORAGE_KEY)
+      if (raw) {
+        const saved = JSON.parse(raw) as ImportProgress
+        if (saved.logs?.length) {
+          setProgress((p) => ({ ...p, ...saved, active: false }))
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+
+    api.getImportJobState().then((job) => {
+      if (job.logs?.length) {
+        setProgress((p) => ({
+          ...p,
+          logs: [...job.logs, t.restoreProgress],
+          active: Boolean(job.active),
+          percent: job.progress?.percent ?? p.percent,
+          fileIndex: job.progress?.file_index ?? 0,
+          fileName: String(job.progress?.file_name ?? ''),
+          batchIndex: job.progress?.batch_index ?? 0,
+          batchTotal: job.progress?.batch_total ?? 0,
+        }))
+      }
+    }).catch(() => {})
   }, [loadInbox])
 
   const upload = async () => {
@@ -111,14 +162,16 @@ export function ImportPage() {
     }
   }
 
-  const appendLog = (line: string) => {
+  const appendLog = useCallback((line: string) => {
     setProgress((p) => {
       const logs = [...p.logs, line]
       if (logs.length > 200) logs.shift()
-      return { ...p, logs }
+      const next = { ...p, logs }
+      persistProgress(next)
+      return next
     })
     setTimeout(() => logEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 0)
-  }
+  }, [persistProgress])
 
   const handleStreamEvent = (ev: InboxStreamEvent) => {
     switch (ev.type) {
@@ -164,25 +217,67 @@ export function ImportPage() {
           percent: inboxStreamPercent(p.fileIndex, p.fileTotal, ev.batch_index - 1, ev.batch_total),
         }))
         break
-      case 'batch_done':
+      case 'batch_done': {
+        const mode =
+          'extract_mode' in ev && ev.extract_mode
+            ? ev.extract_mode === 'vision'
+              ? '视觉'
+              : ev.extract_mode === 'text'
+                ? '文本'
+                : String(ev.extract_mode)
+            : undefined
         setProgress((p) => ({
           ...p,
           batchIndex: ev.batch_index,
           percent: inboxStreamPercent(p.fileIndex, p.fileTotal, ev.batch_index, ev.batch_total),
         }))
-        appendLog(t.logBatch(ev.file, ev.batch_index, ev.batch_total, ev.questions))
+        if (ev.questions === 0 && 'zero_hint' in ev && ev.zero_hint) {
+          appendLog(
+            t.logBatchZero(ev.file, ev.batch_index, ev.batch_total, String(ev.zero_hint), mode),
+          )
+        } else {
+          appendLog(t.logBatch(ev.file, ev.batch_index, ev.batch_total, ev.questions, mode))
+        }
+        break
+      }
+      case 'batch_error': {
+        const pages =
+          ev.page_start && ev.page_end
+            ? t.pageRange(ev.page_start, ev.page_end)
+            : undefined
+        appendLog(
+          ev.retry
+            ? t.logBatchError(ev.file, ev.batch_index, ev.batch_total, ev.error, pages)
+            : t.logBatchErrorSkip(ev.file, ev.batch_index, ev.batch_total, ev.error, pages),
+        )
+        break
+      }
+      case 'retry_plan':
+        appendLog(
+          t.logRetryPlan(
+            ev.file,
+            ev.batches,
+            ev.batch_indices ?? [],
+          ),
+        )
+        break
+      case 'retry_done':
+        appendLog(t.logRetryDone(ev.file, ev.questions_added))
+        loadInbox()
         break
       case 'file_done':
         appendLog(
           t.logFileDone(
             ev.file,
-            ev.result.parsed_questions,
+            ev.result.questions_in_db ?? ev.result.parsed_questions,
             ev.result.pdf_tag ?? undefined,
-          ),
+          ) + (ev.result.partial ? '（部分批次失败，可清除后重导）' : ''),
         )
+        loadInbox()
         break
       case 'file_error':
         appendLog(t.logFileError(ev.file, ev.error))
+        loadInbox()
         break
       case 'fatal':
         appendLog(t.logFileError('—', ev.error))
@@ -192,22 +287,24 @@ export function ImportPage() {
     }
   }
 
-  const processInboxAll = async () => {
-    const pending = inboxFiles.filter((f) => !f.imported)
-    if (!pending.length && !inboxFiles.length) return alert(t.inboxEmpty)
-    const n = pending.length || inboxFiles.length
-    if (!confirm(t.confirmBatch(n))) return
-
+  const runStream = async (
+    runner: (
+      body: Parameters<typeof streamInboxProcessAll>[0],
+      onEvent: (ev: InboxStreamEvent) => void,
+      signal?: AbortSignal,
+    ) => Promise<void>,
+    body: Parameters<typeof streamInboxProcessAll>[0],
+    fileTotal: number,
+  ) => {
     abortRef.current?.abort()
     const ac = new AbortController()
     abortRef.current = ac
-
     setBusy(true)
     setMsg('')
     setProgress({
       active: true,
       percent: 0,
-      fileTotal: pending.length,
+      fileTotal,
       fileIndex: 0,
       fileName: '',
       batchTotal: 0,
@@ -217,43 +314,39 @@ export function ImportPage() {
     })
 
     let summary: InboxProcessResult | undefined
-
     try {
-      await streamInboxProcessAll(
-        {
-          provider,
-          tags: pdfTags,
-          pages_per_batch: pagesPerBatch,
-          auto_confirm: true,
-        },
-        (ev) => {
-          handleStreamEvent(ev)
-          if (ev.type === 'complete') {
-            summary = {
-              processed: ev.processed,
-              skipped: ev.skipped,
-              results: ev.results,
-              skipped_files: ev.skipped_files,
-              errors: ev.errors,
-            }
+      await runner(body, (ev) => {
+        handleStreamEvent(ev)
+        if (ev.type === 'complete') {
+          summary = {
+            processed: ev.processed,
+            skipped: ev.skipped,
+            results: ev.results,
+            skipped_files: ev.skipped_files,
+            errors: ev.errors,
           }
-        },
-        ac.signal,
-      )
+        }
+      }, ac.signal)
 
       if (summary) {
         const lines = summary.results.map((r) => t.batchItem(r.file, r.pdf_tag, r.source_path))
         setMsg(
           t.batchDone(summary.processed, summary.skipped ?? 0, summary.errors.length) +
+            '\n' +
+            t.practiceHint +
             (lines.length ? `\n${lines.join('\n')}` : ''),
         )
       }
-      setProgress((p) => ({ ...p, percent: 100, active: false }))
+      setProgress((p) => {
+        const next = { ...p, percent: 100, active: false }
+        persistProgress(next)
+        return next
+      })
       appendLog(t.progressDone)
       loadInbox()
     } catch (e) {
       if (e instanceof Error && e.name === 'AbortError') {
-        setMsg('已取消')
+        setMsg(t.cancelHint)
       } else {
         setMsg(e instanceof Error ? e.message : t.batchFail)
       }
@@ -264,16 +357,130 @@ export function ImportPage() {
     }
   }
 
+  const processInboxAll = async () => {
+    const pending = inboxFiles.filter((f) => !f.imported)
+    if (!pending.length && !inboxFiles.length) return alert(t.inboxEmpty)
+    const n = pending.length || inboxFiles.length
+    if (!confirm(t.confirmBatch(n))) return
+    await runStream(
+      streamInboxProcessAll,
+      {
+        provider,
+        tags: pdfTags,
+        pages_per_batch: pagesPerBatch,
+        auto_confirm: true,
+      },
+      pending.length,
+    )
+  }
+
+  const processOneFile = async (filename: string) => {
+    if (!confirm(t.importOne + `: ${filename}？`)) return
+    await runStream(
+      streamInboxProcessOne,
+      {
+        provider,
+        tags: pdfTags,
+        pages_per_batch: pagesPerBatch,
+        auto_confirm: true,
+        filename,
+      },
+      1,
+    )
+  }
+
+  const retryFailedFile = async (filename: string) => {
+    const n = failedByFile[filename] ?? 0
+    if (!n) return alert(t.retryNoPending)
+    if (!confirm(t.confirmRetry(filename, n))) return
+    await runStream(
+      streamInboxRetryFailed,
+      {
+        provider,
+        tags: pdfTags,
+        pages_per_batch: pagesPerBatch,
+        auto_confirm: true,
+        filename,
+      },
+      1,
+    )
+  }
+
+  const resetOneFile = async (filename: string) => {
+    if (!confirm(`清除「${filename}」的导入记录与题库条目，然后可重新导入？`)) return
+    setBusy(true)
+    try {
+      const r = await api.resetInboxFile(filename)
+      setMsg(`已删除 ${r.questions_deleted} 题，可重新导入 ${filename}`)
+      loadInbox()
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : '清除失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const cancelImport = () => {
     abortRef.current?.abort()
+    api.cancelInboxImport().catch(() => {})
   }
+
+  const renderParseSettings = () => (
+    <>
+      <p>
+        <label>
+          {t.pagesPerBatch}{' '}
+          <input
+            type="number"
+            min={1}
+            max={20}
+            value={pagesPerBatch}
+            onChange={(e) => setPagesPerBatch(Number(e.target.value))}
+          />
+        </label>
+        <span style={{ marginLeft: 8, fontSize: '0.85rem', color: 'var(--muted)' }}>
+          {t.pagesPerBatchHint}
+        </span>
+      </p>
+      <p>
+        <label>
+          {t.model}{' '}
+          <select value={provider} onChange={(e) => setProvider(e.target.value)}>
+            {providers.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+                {p.available === false ? t.noKey : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+      </p>
+      <p>
+        <label>
+          {t.pdfTags}{' '}
+          <input
+            value={pdfTags}
+            onChange={(e) => setPdfTags(e.target.value)}
+            style={{ width: 280 }}
+          />
+        </label>
+      </p>
+    </>
+  )
 
   return (
     <div className="import-page">
       <h2>{t.title}</h2>
 
+      <div className="card">
+        <h3>{t.parseSettingsTitle}</h3>
+        <p style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>{t.parseSettingsNote}</p>
+        {renderParseSettings()}
+      </div>
+
       <div className="card inbox-card">
         <h3>{t.inboxTitle}</h3>
+        <p style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>{t.inboxUsesSettings}</p>
         <p style={{ fontSize: '0.9rem' }}>
           {t.putPdf}
           <code style={{ marginLeft: 4 }}>{inboxDir || t.loading}</code>
@@ -292,9 +499,23 @@ export function ImportPage() {
           >
             {t.processAll(inboxFiles.filter((f) => !f.imported).length || inboxFiles.length)}
           </button>
-          {busy && (
+          {(busy || progress.active) && (
             <button type="button" className="btn" style={{ marginLeft: 8 }} onClick={cancelImport}>
-              取消
+              取消导入
+            </button>
+          )}
+          {progress.logs.length > 0 && !busy && (
+            <button
+              type="button"
+              className="btn"
+              style={{ marginLeft: 8 }}
+              onClick={() => {
+                setProgress((p) => ({ ...p, logs: [], percent: 0, active: false }))
+                localStorage.removeItem(PROGRESS_STORAGE_KEY)
+                api.clearImportJob().catch(() => {})
+              }}
+            >
+              清空日志
             </button>
           )}
         </div>
@@ -327,11 +548,51 @@ export function ImportPage() {
         {inboxFiles.length > 0 && (
           <ul style={{ marginTop: 12, fontSize: '0.9rem' }}>
             {inboxFiles.map((f) => (
-              <li key={f.name}>
+              <li key={f.name} style={{ marginBottom: 6 }}>
                 {f.name}（{f.size_mb} MB）
+                {(f.questions_in_db ?? 0) > 0 ? (
+                  <span style={{ marginLeft: 8, color: 'var(--success, #059669)' }}>
+                    {t.questionsInDb(f.questions_in_db ?? 0)}
+                  </span>
+                ) : null}
                 {f.imported ? (
                   <span style={{ marginLeft: 8, color: 'var(--muted)' }}>{t.inboxImported}</span>
                 ) : null}
+                {(failedByFile[f.name] ?? 0) > 0 ? (
+                  <span style={{ marginLeft: 8, color: '#b45309' }}>
+                    待重导 {failedByFile[f.name]} 批
+                  </span>
+                ) : null}
+                <span style={{ marginLeft: 8 }}>
+                  {(failedByFile[f.name] ?? 0) > 0 ? (
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      disabled={busy}
+                      onClick={() => retryFailedFile(f.name)}
+                    >
+                      {t.retryFailed(failedByFile[f.name])}
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="btn"
+                    style={{ marginLeft: 4 }}
+                    disabled={busy}
+                    onClick={() => processOneFile(f.name)}
+                  >
+                    {t.importOne}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    style={{ marginLeft: 4 }}
+                    disabled={busy}
+                    onClick={() => resetOneFile(f.name)}
+                  >
+                    {t.resetFile}
+                  </button>
+                </span>
               </li>
             ))}
           </ul>
@@ -340,41 +601,7 @@ export function ImportPage() {
 
       <div className="card">
         <h3>{t.manualTitle}</h3>
-        <p>
-          <label>
-            {t.pagesPerBatch}{' '}
-            <input
-              type="number"
-              min={1}
-              max={20}
-              value={pagesPerBatch}
-              onChange={(e) => setPagesPerBatch(Number(e.target.value))}
-            />
-          </label>
-        </p>
-        <p>
-          <label>
-            {t.model}{' '}
-            <select value={provider} onChange={(e) => setProvider(e.target.value)}>
-              {providers.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.label}
-                  {p.available === false ? t.noKey : ''}
-                </option>
-              ))}
-            </select>
-          </label>
-        </p>
-        <p>
-          <label>
-            {t.pdfTags}{' '}
-            <input
-              value={pdfTags}
-              onChange={(e) => setPdfTags(e.target.value)}
-              style={{ width: 280 }}
-            />
-          </label>
-        </p>
+        <p style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>{t.uploadSizeHint}</p>
         <p>
           <input type="file" accept=".pdf" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
         </p>

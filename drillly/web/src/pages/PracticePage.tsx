@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, type PdfSource, type ProgressSummary, type Question, type TagTreeGroup } from '../api'
 import { QuestionCard } from '../components/QuestionCard'
+import { QuestionSidebar } from '../components/QuestionSidebar'
+import { QuestionEditor } from '../components/QuestionEditor'
+import { QuestionSearchPalette } from '../components/QuestionSearchPalette'
 import { ScratchPad } from '../components/ScratchPad'
-import { questionListLabel, questionSource } from '../utils/questionSource'
 export function PracticePage() {
   const [questions, setQuestions] = useState<Question[]>([])
   const [pdfSources, setPdfSources] = useState<PdfSource[]>([])
@@ -14,22 +16,39 @@ export function PracticePage() {
   const [practiceRound, setPracticeRound] = useState<1 | 2>(1)
   const [roundStatus, setRoundStatus] = useState<'' | 'pending' | 'done'>('')
   const [randomOrder, setRandomOrder] = useState(false)
+  const [searchText, setSearchText] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
   const [activeId, setActiveId] = useState<number | null>(null)
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const [editorOpen, setEditorOpen] = useState(false)
+  const [editorQuestion, setEditorQuestion] = useState<Question | null>(null)
   const [err, setErr] = useState('')
 
   const hasTopicFilter = Boolean(tagGroupFilter || tagChildFilter)
+  const hasSearch = Boolean(searchQuery)
 
-  const buildParams = useCallback(() => {
+  useEffect(() => {
+    const t = window.setTimeout(() => setSearchQuery(searchText.trim()), 300)
+    return () => window.clearTimeout(t)
+  }, [searchText])
+
+  const buildFilterParams = useCallback(() => {
     const p = new URLSearchParams()
     if (pdfFilter) p.set('source_pdf', pdfFilter)
     const tag = tagChildFilter || tagGroupFilter
     if (tag) p.set('tags', tag)
     if (practiceRound) p.set('practice_round', String(practiceRound))
     if (roundStatus) p.set('round_status', roundStatus)
-    if (randomOrder) p.set('order', 'random')
-    p.set('limit', '500')
     return p
-  }, [pdfFilter, tagGroupFilter, tagChildFilter, practiceRound, roundStatus, randomOrder])
+  }, [pdfFilter, tagGroupFilter, tagChildFilter, practiceRound, roundStatus])
+
+  const buildParams = useCallback(() => {
+    const p = buildFilterParams()
+    if (searchQuery) p.set('search', searchQuery)
+    if (randomOrder) p.set('order', 'random')
+    p.set('limit', '200')
+    return p
+  }, [buildFilterParams, searchQuery, randomOrder])
 
   const load = useCallback(() => {
     api
@@ -52,7 +71,6 @@ export function PracticePage() {
   useEffect(() => {
     api.listTagTree().then(setTagTree).catch(() => {})
     api.listPdfSources().then(setPdfSources).catch(() => {})
-    api.backfillSourceTags?.().catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -60,11 +78,27 @@ export function PracticePage() {
     loadSummary()
   }, [load, loadSummary])
 
+  useEffect(() => {
+    let lastFocus = 0
+    const onFocus = () => {
+      const now = Date.now()
+      if (now - lastFocus < 30_000) return
+      lastFocus = now
+      load()
+      loadSummary()
+      api.listPdfSources().then(setPdfSources).catch(() => {})
+    }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [load, loadSummary])
+
   const clearFilters = () => {
     setPdfFilter('')
     setTagGroupFilter('')
     setTagChildFilter('')
     setRoundStatus('')
+    setSearchText('')
+    setSearchQuery('')
   }
 
   const currentIdx = questions.findIndex((q) => q.id === activeId)
@@ -84,13 +118,55 @@ export function PracticePage() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'q' || e.key === 'Q')) {
+        e.preventDefault()
+        setPaletteOpen(true)
+        return
+      }
+      if (paletteOpen) return
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
       if (e.key === 'ArrowLeft') goPrev()
       if (e.key === 'ArrowRight') goNext()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [goPrev, goNext])
+  }, [goPrev, goNext, paletteOpen])
+
+  const paletteFilterParams = useMemo(() => buildFilterParams(), [buildFilterParams])
+
+  const onPaletteSelect = (q: Question, query: string) => {
+    setSearchText(query)
+    setSearchQuery(query)
+    setActiveId(q.id)
+  }
+
+  const openCreate = () => {
+    setEditorQuestion(null)
+    setEditorOpen(true)
+  }
+
+  const openEdit = (q: Question) => {
+    setEditorQuestion(q)
+    setEditorOpen(true)
+  }
+
+  const onEditorSaved = (q: Question) => {
+    load()
+    loadSummary()
+    setActiveId(q.id)
+  }
+
+  const deleteCurrent = async () => {
+    if (!current) return
+    if (!window.confirm(`确定删除题目 #${current.id}？提交记录将一并删除，不可恢复。`)) return
+    try {
+      await api.deleteQuestion(current.id)
+      load()
+      loadSummary()
+    } catch (e) {
+      alert(e instanceof Error ? e.message : '删除失败')
+    }
+  }
 
   const onSubmitted = () => {
     load()
@@ -107,35 +183,29 @@ export function PracticePage() {
 
   return (
     <div className="practice-layout">
+      <QuestionSearchPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        filterParams={paletteFilterParams}
+        onSelect={onPaletteSelect}
+      />
+      <QuestionEditor
+        open={editorOpen}
+        question={editorQuestion}
+        onClose={() => setEditorOpen(false)}
+        onSaved={onEditorSaved}
+      />
       {questions.length > 0 && (
         <aside className="question-sidebar">
           <div className="question-sidebar-head">
             <strong>题目列表</strong>
             <span className="muted">{questions.length} 题</span>
           </div>
-          <ul className="question-sidebar-list">
-            {questions.map((q) => {
-              const { pdf } = questionSource(q)
-              const pr = q.practice
-              return (
-                <li key={q.id}>
-                  <button
-                    type="button"
-                    className={q.id === current?.id ? 'q-item active' : 'q-item'}
-                    onClick={() => setActiveId(q.id)}
-                  >
-                    <span className="q-item-id">
-                      #{q.id}
-                      {pr?.round1 ? ' ·1✓' : ''}
-                      {pr?.round2 ? ' ·2✓' : ''}
-                    </span>
-                    <span className="q-item-title">{questionListLabel(q)}</span>
-                    {pdf && <span className="q-item-pdf">{pdf}</span>}
-                  </button>
-                </li>
-              )
-            })}
-          </ul>
+          <QuestionSidebar
+            questions={questions}
+            activeId={current?.id ?? null}
+            onSelect={setActiveId}
+          />
         </aside>
       )}
 
@@ -147,23 +217,42 @@ export function PracticePage() {
         )}
 
         {summary && summary.total > 0 && (
-          <div className="practice-progress-summary card">
-            <span>
-              一刷 <strong>{summary.round1_done}</strong> / {summary.total}
-            </span>
-            <span style={{ marginLeft: 16 }}>
-              二刷 <strong>{summary.round2_done}</strong> / {summary.total}
-            </span>
+          <div className="kpi-strip">
+            <div className="kpi-card">
+              <div className="kpi-label">一刷进度</div>
+              <div className="kpi-value">
+                {summary.round1_done}
+                <span> / {summary.total}</span>
+              </div>
+            </div>
+            <div className="kpi-card">
+              <div className="kpi-label">二刷进度</div>
+              <div className="kpi-value">
+                {summary.round2_done}
+                <span> / {summary.total}</span>
+              </div>
+            </div>
             {pdfFilter && (
-              <span className="muted" style={{ marginLeft: 12 }}>
-                当前 PDF：{pdfFilter}
-              </span>
+              <div className="kpi-card">
+                <div className="kpi-label">当前来源</div>
+                <div className="kpi-meta">{pdfFilter}</div>
+              </div>
             )}
           </div>
         )}
 
-        <div className="filters">
-          <select value={pdfFilter} onChange={(e) => setPdfFilter(e.target.value)}>
+        <div className="practice-toolbar">
+          <div className="toolbar-section">
+            <span className="toolbar-label">搜索与筛选</span>
+            <input
+              type="search"
+              className="filter-search"
+              placeholder="搜索题干…（Ctrl+Q）"
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              aria-label="搜索题目"
+            />
+            <select value={pdfFilter} onChange={(e) => setPdfFilter(e.target.value)}>
             <option value="">全部 PDF（来源）</option>
             {pdfSources.map((s) => (
               <option key={s.source_pdf} value={s.source_pdf}>
@@ -223,33 +312,40 @@ export function PracticePage() {
             />
             随机顺序
           </label>
-          {(pdfFilter || hasTopicFilter || roundStatus) && (
-            <button type="button" className="btn" onClick={clearFilters}>
-              清除筛选
+            {(pdfFilter || hasTopicFilter || roundStatus || hasSearch) && (
+              <button type="button" className="btn" onClick={clearFilters}>
+                清除筛选
+              </button>
+            )}
+          </div>
+          <div className="toolbar-section">
+            <span className="toolbar-label">操作</span>
+            <button type="button" className="btn btn-primary" onClick={openCreate}>
+              新建题目
             </button>
-          )}
-          <button type="button" className="btn" onClick={load}>
-            刷新
-          </button>
-          {questions.length > 1 && (
-            <>
-              <button type="button" className="btn" onClick={goPrev}>
-                上一题
-              </button>
-              <button type="button" className="btn" onClick={goNext}>
-                下一题
-              </button>
-              <span className="muted" style={{ alignSelf: 'center' }}>
-                {currentIdx + 1} / {questions.length}
-              </span>
-            </>
-          )}
-          <button type="button" className="btn" onClick={() => exportMd(false)}>
-            导出 MD
-          </button>
-          <button type="button" className="btn" onClick={() => exportMd(true)}>
-            导出 ZIP
-          </button>
+            <button type="button" className="btn" onClick={load}>
+              刷新
+            </button>
+            {questions.length > 1 && (
+              <>
+                <button type="button" className="btn" onClick={goPrev}>
+                  上一题
+                </button>
+                <button type="button" className="btn" onClick={goNext}>
+                  下一题
+                </button>
+                <span className="nav-counter">
+                  {currentIdx + 1} / {questions.length}
+                </span>
+              </>
+            )}
+            <button type="button" className="btn" onClick={() => exportMd(false)}>
+              导出 MD
+            </button>
+            <button type="button" className="btn" onClick={() => exportMd(true)}>
+              导出 ZIP
+            </button>
+          </div>
         </div>
 
         {current ? (
@@ -258,15 +354,18 @@ export function PracticePage() {
             tagGroups={tagTree}
             practiceRound={practiceRound}
             onSubmitted={onSubmitted}
+            onEdit={() => openEdit(current)}
+            onDelete={deleteCurrent}
+            imagePasteEnabled={!paletteOpen && !editorOpen}
           />
         ) : (
           <div className="card practice-empty">
             <p>
               <strong>当前没有可练习的题目</strong>
             </p>
-            <ul style={{ margin: '0.5rem 0', paddingLeft: '1.25rem', color: 'var(--muted)' }}>
+            <ul>
               <li>先选 PDF 来源，或去「PDF 导入」入库</li>
-              {(pdfFilter || hasTopicFilter || roundStatus) && (
+              {(pdfFilter || hasTopicFilter || roundStatus || hasSearch) && (
                 <li>筛选过严时可点「清除筛选」</li>
               )}
             </ul>

@@ -5,11 +5,11 @@ from __future__ import annotations
 import random
 from typing import Any
 
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session, joinedload
 
-from app.models import PracticeProgress, Question
-from app.services.tag_hierarchy import question_matches_tag_filter
+from app.models import PracticeProgress, Question, Tag
+from app.services.tag_hierarchy import is_group_name, question_matches_tag_filter
 
 
 def source_pdf_from_content(content: dict) -> str:
@@ -17,16 +17,87 @@ def source_pdf_from_content(content: dict) -> str:
     return str(meta.get("source_pdf") or "").strip()
 
 
+def question_search_blob(content: dict | None) -> str:
+    """可搜索正文：题干、选项、章节、来源等（小写便于匹配）。"""
+    if not content:
+        return ""
+    parts: list[str] = []
+    imgs = content.get("images")
+    if isinstance(imgs, list):
+        for u in imgs:
+            if isinstance(u, str) and u.strip():
+                parts.append(u)
+    for key in ("title", "stem", "explanation"):
+        v = content.get(key)
+        if isinstance(v, str) and v.strip():
+            parts.append(v)
+    meta = content.get("metadata")
+    if isinstance(meta, dict):
+        for key in ("chapter", "source_pdf", "source_path"):
+            v = meta.get(key)
+            if isinstance(v, str) and v.strip():
+                parts.append(v)
+    opts = content.get("options")
+    if isinstance(opts, list):
+        for o in opts:
+            if isinstance(o, dict):
+                for key in ("key", "content"):
+                    v = o.get(key)
+                    if isinstance(v, str) and v.strip():
+                        parts.append(v)
+    return "\n".join(parts).lower()
+
+
+def question_matches_search(content: dict, query: str) -> bool:
+    q = (query or "").strip().lower()
+    if not q:
+        return True
+    return q in question_search_blob(content)
+
+
+def _apply_tag_filters(q, tags: str):
+    names = [t.strip() for t in (tags or "").split(",") if t.strip()]
+    if not names:
+        return q
+    clauses = []
+    for name in names:
+        if is_group_name(name):
+            clauses.append(
+                Question.tags.any(
+                    or_(Tag.name == name, Tag.name.startswith(f"{name}/"))
+                )
+            )
+        else:
+            clauses.append(Question.tags.any(Tag.name == name))
+    return q.filter(or_(*clauses))
+
+
+def _apply_practice_filter(q, practice_round: int | None, round_status: str | None):
+    if practice_round not in (1, 2) or round_status not in ("pending", "done"):
+        return q
+    join_cond = and_(
+        Question.id == PracticeProgress.question_id,
+        PracticeProgress.round == practice_round,
+    )
+    if round_status == "done":
+        return q.join(PracticeProgress, join_cond).filter(PracticeProgress.done.is_(True))
+    return q.outerjoin(PracticeProgress, join_cond).filter(
+        or_(PracticeProgress.id.is_(None), PracticeProgress.done.is_(False))
+    )
+
+
 def list_pdf_sources(db: Session) -> list[dict[str, Any]]:
-    rows = db.query(Question).all()
-    counts: dict[str, int] = {}
-    for q in rows:
-        name = source_pdf_from_content(q.content)
-        if name:
-            counts[name] = counts.get(name, 0) + 1
+    rows = (
+        db.query(Question.source_pdf, func.count(Question.id).label("cnt"))
+        .filter(Question.source_pdf != "")
+        .group_by(Question.source_pdf)
+        .order_by(func.count(Question.id).desc(), Question.source_pdf)
+        .all()
+    )
     return [
-        {"source_pdf": name, "question_count": n}
-        for name, n in sorted(counts.items(), key=lambda x: (-x[1], x[0]))
+        {"source_pdf": name, "question_count": int(n)}
+        for name, n in rows
+        if name
     ]
 
 
@@ -37,6 +108,7 @@ def load_questions(
     category: str | None = None,
     q_type: str | None = None,
     source_pdf: str | None = None,
+    search: str | None = None,
     practice_round: int | None = None,
     round_status: str | None = None,
     order: str = "id",
@@ -57,39 +129,22 @@ def load_questions(
 
             q = q.join(Category).filter(Category.name == category)
 
-    rows = q.order_by(Question.id).all()
-
     if source_pdf:
-        rows = [r for r in rows if source_pdf_from_content(r.content) == source_pdf]
+        q = q.filter(Question.source_pdf == source_pdf)
 
-    if tags:
-        names = [t.strip() for t in tags.split(",") if t.strip()]
-        rows = [
-            r
-            for r in rows
-            if any(
-                question_matches_tag_filter({t.name for t in r.tags}, n) for n in names
-            )
-        ]
+    term = (search or "").strip().lower()
+    if term:
+        q = q.filter(Question.search_text.contains(term))
 
-    if practice_round in (1, 2) and round_status in ("pending", "done"):
-        prog = {
-            p.question_id: p
-            for p in db.query(PracticeProgress).filter(
-                PracticeProgress.round == practice_round
-            )
-        }
-        if round_status == "done":
-            rows = [r for r in rows if r.id in prog and prog[r.id].done]
-        else:
-            rows = [r for r in rows if r.id not in prog or not prog[r.id].done]
+    q = _apply_tag_filters(q, tags)
+    q = _apply_practice_filter(q, practice_round, round_status)
 
     if order == "random":
-        random.shuffle(rows)
-    elif order == "id":
-        rows.sort(key=lambda r: r.id)
+        q = q.order_by(func.random())
+    else:
+        q = q.order_by(Question.id)
 
-    return rows[offset : offset + limit]
+    return q.distinct().offset(offset).limit(limit).all()
 
 
 def progress_map(db: Session, question_ids: list[int]) -> dict[int, dict[str, bool]]:
@@ -100,7 +155,9 @@ def progress_map(db: Session, question_ids: list[int]) -> dict[int, dict[str, bo
         .filter(PracticeProgress.question_id.in_(question_ids))
         .all()
     )
-    out: dict[int, dict[str, bool]] = {qid: {"round1": False, "round2": False} for qid in question_ids}
+    out: dict[int, dict[str, bool]] = {
+        qid: {"round1": False, "round2": False} for qid in question_ids
+    }
     for p in rows:
         if p.question_id not in out:
             out[p.question_id] = {"round1": False, "round2": False}
@@ -116,15 +173,25 @@ def progress_summary(
     *,
     source_pdf: str | None = None,
 ) -> dict[str, Any]:
-    rows = db.query(Question).all()
+    base = db.query(Question)
     if source_pdf:
-        rows = [r for r in rows if source_pdf_from_content(r.content) == source_pdf]
-    ids = [r.id for r in rows]
-    total = len(ids)
+        base = base.filter(Question.source_pdf == source_pdf)
+    total = base.count()
     if not total:
         return {"total": 0, "round1_done": 0, "round2_done": 0}
 
-    prog = progress_map(db, ids)
-    r1 = sum(1 for qid in ids if prog[qid]["round1"])
-    r2 = sum(1 for qid in ids if prog[qid]["round2"])
-    return {"total": total, "round1_done": r1, "round2_done": r2}
+    def _count_round(rnd: int) -> int:
+        q = (
+            db.query(func.count(func.distinct(PracticeProgress.question_id)))
+            .join(Question, Question.id == PracticeProgress.question_id)
+            .filter(PracticeProgress.round == rnd, PracticeProgress.done.is_(True))
+        )
+        if source_pdf:
+            q = q.filter(Question.source_pdf == source_pdf)
+        return int(q.scalar() or 0)
+
+    return {
+        "total": total,
+        "round1_done": _count_round(1),
+        "round2_done": _count_round(2),
+    }

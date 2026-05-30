@@ -1,8 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
-from app.models import Category, Question, Tag
+from app.models import Category, PracticeProgress, Question, Submission, Tag
+from app.services.question_images import (
+    remove_all_images,
+    remove_image_file,
+    save_upload,
+)
 from app.services.tag_hierarchy import build_tag_tree, question_matches_tag_filter
 from app.schemas.api_models import (
     CategoryCreate,
@@ -131,6 +136,8 @@ def get_question(qid: int, db: Session = Depends(get_db)):
 @router.patch("/{qid}/", response_model=QuestionOut)
 def patch_question(qid: int, body: QuestionPatch, db: Session = Depends(get_db)):
     q = _load_question(db, qid)
+    if body.type is not None:
+        q.type = body.type
     if body.category_id is not None:
         q.category_id = body.category_id
     if body.content is not None:
@@ -141,9 +148,46 @@ def patch_question(qid: int, body: QuestionPatch, db: Session = Depends(get_db))
     return _load_question(db, qid)
 
 
+@router.post("/{qid}/images/")
+async def upload_question_image(
+    qid: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    q = _load_question(db, qid)
+    url = await save_upload(qid, file)
+    content = dict(q.content or {})
+    images = list(content.get("images") or [])
+    if url not in images:
+        images.append(url)
+    content["images"] = images
+    q.content = content
+    db.commit()
+    return {"url": url, "images": images}
+
+
+@router.delete("/{qid}/images/")
+def delete_question_image(
+    qid: int,
+    url: str = Query(..., description="附图 URL，如 /api/media/question_images/1/a.png"),
+    db: Session = Depends(get_db),
+):
+    q = _load_question(db, qid)
+    remove_image_file(qid, url)
+    content = dict(q.content or {})
+    images = [u for u in (content.get("images") or []) if u != url]
+    content["images"] = images
+    q.content = content
+    db.commit()
+    return {"ok": True, "images": images}
+
+
 @router.delete("/{qid}/")
 def delete_question(qid: int, db: Session = Depends(get_db)):
     q = _load_question(db, qid)
+    db.query(Submission).filter(Submission.question_id == qid).delete()
+    db.query(PracticeProgress).filter(PracticeProgress.question_id == qid).delete()
+    remove_all_images(qid)
     db.delete(q)
     db.commit()
     return {"ok": True}

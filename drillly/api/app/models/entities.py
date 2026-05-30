@@ -64,6 +64,8 @@ class Question(Base):
     category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id"), nullable=True)
     type: Mapped[str] = mapped_column(String(32), nullable=False)
     content: Mapped[dict] = mapped_column(JSON, nullable=False)
+    source_pdf: Mapped[str] = mapped_column(String(512), default="", index=True)
+    search_text: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(32), default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

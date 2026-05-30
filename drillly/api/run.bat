@@ -9,7 +9,19 @@ if not exist ".venv\Scripts\python.exe" (
     pause
     exit /b 1
   )
-  call ".venv\Scripts\pip.exe" install -r requirements.txt -q
+)
+echo Installing/updating API dependencies...
+call ".venv\Scripts\pip.exe" install -r requirements.txt -q
+if errorlevel 1 (
+  echo pip install failed.
+  pause
+  exit /b 1
+)
+call ".venv\Scripts\python.exe" -c "import fitz; print('pymupdf OK')"
+if errorlevel 1 (
+  echo pymupdf missing - run: .venv\Scripts\pip install pymupdf
+  pause
+  exit /b 1
 )
 if not exist ".env" if exist ".env.example" copy /y ".env.example" ".env" >nul
 call ".venv\Scripts\python.exe" scripts\seed_demo.py

@@ -81,14 +81,49 @@ export const api = {
   listTagTree: () => request<TagTreeGroup[]>('/questions/tags/tree/'),
   createTag: (body: { name: string; color?: string }) =>
     request<Tag>('/questions/tags/', { method: 'POST', body: JSON.stringify(body) }),
+  getQuestion: (id: number) => request<Question>(`/questions/${id}/`),
+  createQuestion: (body: {
+    type: string
+    content: Record<string, unknown>
+    category_id?: number | null
+    tag_ids?: number[]
+  }) =>
+    request<Question>('/questions/', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   patchQuestion: (
     id: number,
-    body: { category_id?: number | null; tag_ids?: number[]; content?: Record<string, unknown> },
+    body: {
+      type?: string
+      category_id?: number | null
+      tag_ids?: number[]
+      content?: Record<string, unknown>
+    },
   ) =>
     request<Question>(`/questions/${id}/`, {
       method: 'PATCH',
       body: JSON.stringify(body),
     }),
+  deleteQuestion: (id: number) =>
+    request<{ ok: boolean }>(`/questions/${id}/`, { method: 'DELETE' }),
+  uploadQuestionImage: async (questionId: number, file: File) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    const r = await fetch(`${BASE}/questions/${questionId}/images/`, {
+      method: 'POST',
+      body: fd,
+    })
+    if (!r.ok) throw new Error(await r.text() || r.statusText)
+    return r.json() as Promise<{ url: string; images: string[] }>
+  },
+  deleteQuestionImage: (questionId: number, url: string) => {
+    const p = new URLSearchParams({ url })
+    return request<{ ok: boolean; images: string[] }>(
+      `/questions/${questionId}/images/?${p}`,
+      { method: 'DELETE' },
+    )
+  },
   submit: (body: {
     question_id: number
     answer: Record<string, unknown>
@@ -142,6 +177,25 @@ export const api = {
     request<PublicSettings>('/settings/', { method: 'PATCH', body: JSON.stringify(body) }),
   getInbox: () =>
     request<{ inbox_dir: string; files: InboxFile[] }>('/import/inbox/'),
+  getImportJobState: () => request<ImportJobState>('/import/inbox/job-state/'),
+  cancelInboxImport: () =>
+    request<{ ok: boolean; message: string }>('/import/inbox/cancel/', {
+      method: 'POST',
+      body: '{}',
+    }),
+  clearImportJob: () =>
+    request<{ ok: boolean }>('/import/inbox/clear-job/', { method: 'POST', body: '{}' }),
+  resetInboxFile: (filename: string) =>
+    request<{ file: string; questions_deleted: number; ledger_cleared: boolean }>(
+      '/import/inbox/reset/',
+      { method: 'POST', body: JSON.stringify({ filename }) },
+    ),
+  getFailedBatches: () =>
+    request<{
+      pending: { file: string; batch_index: number; page_start: number; page_end: number; error: string; chunk_path?: string }[]
+      count_by_file: Record<string, number>
+      total: number
+    }>('/import/inbox/failed-batches/'),
   processInboxAll: (body: InboxProcessBody) =>
     request<InboxProcessResult>('/import/inbox/process-all/', {
       method: 'POST',
@@ -174,6 +228,21 @@ export type InboxFile = {
   imported?: boolean
   imported_at?: string
   task_id?: number
+  question_count?: number
+  questions_in_db?: number
+}
+
+export type ImportJobState = {
+  active: boolean
+  logs: string[]
+  progress?: {
+    percent?: number
+    file_index?: number
+    file_name?: string
+    batch_index?: number
+    batch_total?: number
+  }
+  summary?: InboxProcessResult
 }
 export type InboxProcessBody = {
   provider: string
@@ -181,6 +250,8 @@ export type InboxProcessBody = {
   tags: string
   pages_per_batch: number
   auto_confirm: boolean
+  /** 单文件导入 / 重试失败批次时必填 */
+  filename?: string
 }
 export type InboxProcessItem = {
   file: string
@@ -188,9 +259,13 @@ export type InboxProcessItem = {
   pdf_tag?: string
   task_id: number
   batches: number
+  batch_errors?: number
+  partial?: boolean
   parsed_questions: number
   created_question_ids: number[]
-  moved_to: string
+  questions_in_db?: number
+  moved_to?: string
+  kept_in_inbox?: boolean
 }
 export type InboxSkippedItem = {
   file: string
