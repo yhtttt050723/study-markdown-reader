@@ -1,10 +1,13 @@
-# 子项目独立仓库（见 study-markdown-reader）
-/md-reader-app/
+# 子项目独立 Git 仓库（各推各的远端）
+/drillly/
+/video-dash/
 
 # 依赖与构建
 node_modules/
 **/node_modules/
 dist/
+dist-ssr/
+release/
 .vite/
 *.tsbuildinfo
 
@@ -15,8 +18,31 @@ study-suite.resolved.json
 # 密钥
 .env
 .env.*
+*.local
+
+# Cursor（规范 .mdc 仅本地，不上传远端）
+.cursor/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
 
 # 系统
 Thumbs.db
 .DS_Store
 desktop.ini
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea

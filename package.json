@@ -1,0 +1,59 @@
+{
+  "name": "md-reader-app",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "concurrently -n vite,electron -c blue,green \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "dev:renderer": "vite",
+    "dev:electron": "node scripts/wait-and-electron.cjs",
+    "dev:web": "vite",
+    "start": "electron .",
+    "build": "vite build",
+    "pack:win": "npm run build && electron-builder --win portable",
+    "lint": "eslint .",
+    "preview": "vite preview",
+    "kb:pg": "docker compose -f docker-compose.kb.yml up -d",
+    "kb:serve": "npm run start --prefix kb-server"
+  },
+  "build": {
+    "appId": "com.study.mdreader",
+    "productName": "Study Markdown Reader",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "electron/**",
+      "package.json"
+    ],
+    "win": {
+      "icon": "public/app-icon.ico",
+      "target": [
+        "portable"
+      ]
+    }
+  },
+  "dependencies": {
+    "marked": "^18.0.2",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "electron": "^41.3.0",
+    "electron-builder": "^26.8.1",
+    "eslint": "^10.2.1",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "globals": "^17.5.0",
+    "vite": "^8.0.10",
+    "wait-on": "^9.0.5"
+  }
+}
