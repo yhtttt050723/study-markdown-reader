@@ -4,7 +4,18 @@ import {
   enumerateDatesInclusive,
   joinFolderRel,
   sumDailyLogMinutesInRange,
+  creditWatchedDeltaToDailyLog,
+  discoverSeriesFromStudyMarkdownFiles,
+  mergeDiscoveredSeries,
 } from "./videoProgress.js";
+
+function todayYmd() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
 
 function formatSec(sec) {
   const s = Math.max(0, Math.floor(Number(sec) || 0));
@@ -50,6 +61,9 @@ export function VideoProgressDashboard({
   );
 
   const [parsedMap, setParsedMap] = useState(() => new Map());
+  const [seriesDiscoverDone, setSeriesDiscoverDone] = useState(false);
+
+  const effectiveSeries = useMemo(() => data.series || [], [data.series]);
 
   const loadDetails = useCallback(async () => {
     if (!folderPath || !hasApi || typeof window.electronAPI?.readMarkdownFile !== "function") {
@@ -57,7 +71,7 @@ export function VideoProgressDashboard({
       return;
     }
     const next = new Map();
-    for (const s of data.series || []) {
+    for (const s of effectiveSeries) {
       const fp = joinFolderRel(folderPath, s.detailRelPath);
       if (!fp) continue;
       try {
@@ -69,7 +83,29 @@ export function VideoProgressDashboard({
       }
     }
     setParsedMap(next);
-  }, [folderPath, hasApi, data.series]);
+  }, [folderPath, hasApi, effectiveSeries]);
+
+  useEffect(() => {
+    if (!folderPath || !hasApi || seriesDiscoverDone) return;
+    if (typeof window.electronAPI?.listMarkdownFiles !== "function") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const files = await window.electronAPI.listMarkdownFiles(folderPath);
+        if (cancelled) return;
+        const discovered = discoverSeriesFromStudyMarkdownFiles(files);
+        setSeriesDiscoverDone(true);
+        if (discovered.length > (data.series?.length || 0)) {
+          onChange(mergeDiscoveredSeries(data, discovered));
+        }
+      } catch {
+        if (!cancelled) setSeriesDiscoverDone(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [folderPath, hasApi, seriesDiscoverDone, data, onChange]);
 
   useEffect(() => {
     let cancelled = false;
@@ -95,6 +131,45 @@ export function VideoProgressDashboard({
 
   const weekHours = (weekMinutes / 60).toFixed(1);
 
+  const uncreditedMinutes = useMemo(() => {
+    let sec = 0;
+    for (const s of effectiveSeries) {
+      const stats = parsedMap.get(s.bvid);
+      if (!stats) continue;
+      const credited = Math.max(0, Math.floor(Number(s.creditedWatchedSeconds) || 0));
+      sec += Math.max(0, stats.doneSeconds - credited);
+    }
+    return Math.round(sec / 60);
+  }, [effectiveSeries, parsedMap]);
+
+  const syncChecklistToDaily = useCallback(
+    (forceUncredited = false) => {
+      const updates = effectiveSeries
+        .map((s) => {
+          const stats = parsedMap.get(s.bvid);
+          if (!stats) return null;
+          return {
+            bvid: s.bvid,
+            label: s.label,
+            detailRelPath: s.detailRelPath,
+            watchedSeconds: stats.doneSeconds,
+            totalSeconds: stats.totalSeconds,
+          };
+        })
+        .filter(Boolean);
+      if (updates.length === 0) return;
+      const { data: next, addedMinutes } = creditWatchedDeltaToDailyLog(
+        data,
+        updates,
+        todayYmd(),
+        { forceUncredited }
+      );
+      onChange(next);
+      return addedMinutes;
+    },
+    [data, onChange, parsedMap, effectiveSeries]
+  );
+
   return (
     <div
       className="progress-dash-overlay"
@@ -116,7 +191,7 @@ export function VideoProgressDashboard({
 
         <p className="progress-dash-hint">
           {sourceHint ||
-            "数据保存在 `smr-video-progress` 代码块与 localStorage；「本周观看」= 下方日期窗口内 dailyLog 分钟之和。"}
+            "「本周观看」= 下方 dailyLog 分钟之和；「B 站系列」= 详情 .md 里累计勾选时长。二者不同属正常；用 video-dash 勾选或点「同步勾选→登记」可把新观看记入 dailyLog。"}
         </p>
 
         <div className="video-prog-week-banner">
@@ -127,12 +202,26 @@ export function VideoProgressDashboard({
             </strong>
             <span className="video-prog-week-sub">约 {weekHours} 小时 · 窗口 {weekStart} ～ {weekEnd}</span>
           </div>
+          {uncreditedMinutes > 0 && folderPath && hasApi ? (
+            <div className="video-prog-sync-row">
+              <p className="video-prog-sync-hint">
+                检测到约 <strong>{uncreditedMinutes} 分钟</strong> 已勾选尚未计入登记。
+              </p>
+              <button
+                type="button"
+                className="ghost-btn video-prog-sync-btn"
+                onClick={() => syncChecklistToDaily(true)}
+              >
+                同步勾选 → 记入今日登记
+              </button>
+            </div>
+          ) : null}
         </div>
 
         <section className="video-prog-section">
           <h3 className="video-prog-section-title">最近 7 日 · 每日观看分钟</h3>
           <p className="video-prog-section-lead">
-            看完课后在此填「当日累计」即可；与「本周进度」面板使用同一自然周窗口（含今天在内的 7 天）。
+            看完课后在此填「当日累计」；<strong>与下方 B 站勾选进度是两套数据</strong>。video-dash 新勾选会自动写入；也可用上方的「同步勾选→登记」。
           </p>
           <div className="video-prog-daily-grid">
             {weekDates.map((d) => (
@@ -162,13 +251,13 @@ export function VideoProgressDashboard({
           {!folderPath || !hasApi ? (
             <p className="progress-dash-placeholder-sub">打开本地资料库文件夹后，将自动读取各 BV 详情 .md。</p>
           ) : null}
-          {(data.series || []).length === 0 ? (
+          {effectiveSeries.length === 0 ? (
             <p className="progress-dash-placeholder-sub">
-              尚无系列：请 @「B站视频列表与学习进度生成.mdc」并贴视频链接，或手动编辑「视频进度看板数据.md」内 <code>series</code>。
+              尚无系列：请在「学习视频进度」目录放置 <code>BV*.md</code>，或在 video-dash 中同步后刷新。
             </p>
           ) : (
             <div className="video-prog-series-list">
-              {(data.series || []).map((s) => {
+              {effectiveSeries.map((s) => {
                 const stats = parsedMap.get(s.bvid);
                 const totalS = stats?.totalSeconds ?? s.totalSeconds ?? 0;
                 const doneS = stats?.doneSeconds ?? 0;

@@ -3,6 +3,7 @@ import express from "express";
 import { createPool, ensureSchema } from "./db.mjs";
 import {
   checkOllamaReachable,
+  completeNoteFromContext,
   ollamaChatModel,
   suggestTagsFromNote,
 } from "./ollama.mjs";
@@ -70,6 +71,25 @@ app.post("/api/llm/suggest-tags", async (req, res) => {
     const title = String(req.body?.title ?? "");
     const body = String(req.body?.body ?? "");
     const out = await suggestTagsFromNote({ title, body });
+    res.json(out);
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) });
+  }
+});
+
+/** 本地 Ollama：根据光标上下文续写笔记（不写库） */
+app.post("/api/llm/complete", async (req, res) => {
+  const ok = await checkOllamaReachable();
+  if (!ok) {
+    return res.status(503).json({
+      error: "Ollama 不可用：请确认已运行 ollama serve，且已拉取模型（如 qwen2.5:3b）。",
+    });
+  }
+  try {
+    const title = String(req.body?.title ?? "");
+    const prefix = String(req.body?.prefix ?? "");
+    const suffix = String(req.body?.suffix ?? "");
+    const out = await completeNoteFromContext({ title, prefix, suffix });
     res.json(out);
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });

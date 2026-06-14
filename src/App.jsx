@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { marked } from "marked";
+import { parseMarkdownWithMath } from "./markdownRender.js";
 import "./App.css";
 import {
   LS_APP_SECTION,
   LS_FOLDER_PATH,
+  LS_QUICK_NOTES,
   LS_QUIZ_FILE_ONLY,
   LS_QUIZ_LOG,
   LS_SECOND_PLAN_FOCUS,
@@ -38,7 +40,14 @@ import { QuizStatsDashboard } from "./QuizStatsDashboard.jsx";
 import { SchoolTargetsDashboard } from "./SchoolTargetsDashboard.jsx";
 import { isSchoolTargetsFile, parseSchoolTargetsMarkdown } from "./schoolTargets.js";
 import { PlanBoardDashboard } from "./PlanBoardDashboard.jsx";
-import { isPlanBoardFile, parsePlanBoardMarkdown } from "./planBoard.js";
+import {
+  checklistBoardTitle,
+  isChecklistBoardFile,
+  isPlanBoardFile,
+  isStatusBoardFile,
+  parsePlanBoardMarkdown,
+  togglePlanBoardItem,
+} from "./planBoard.js";
 import {
   buildStudyProgressMarkdown,
   DEFAULT_STUDY_PROGRESS,
@@ -63,6 +72,7 @@ import {
   findSubjectCatalogFile,
   parse408Catalog,
   parseMathCatalog,
+  parseZhangYu1000Catalog,
 } from "./studyCatalog.js";
 import {
   isPlanPathSourceFile,
@@ -82,9 +92,28 @@ import { StudyPathDashboard } from "./StudyPathDashboard.jsx";
 import { StudyProgressDashboard } from "./StudyProgressDashboard.jsx";
 import { VideoProgressDashboard } from "./VideoProgressDashboard.jsx";
 import { WeeklyProgressDashboard } from "./WeeklyProgressDashboard.jsx";
+import { StudyTimeCalendarDashboard } from "./StudyTimeCalendarDashboard.jsx";
+import {
+  listDailyReportFiles,
+  loadStudyTimeByDate,
+  localYmd as studyLocalYmd,
+} from "./studyDailyTime.js";
+import {
+  addPendingThreeHourBlock,
+  buildPendingStudyTimeMarkdown,
+  formatPendingCopyForAgent,
+  getPendingBlocksForDate,
+  mergeStudyTimeDisplay,
+  parsePendingStudyTimeMarkdown,
+  readPendingStudyLog,
+  removePendingBlock,
+  resolvePendingStudyTimeFilePath,
+  writePendingStudyLog,
+} from "./studyTimeQuickLog.js";
 import { FinanceDashboard } from "./FinanceDashboard.jsx";
 import { readFinanceState, writeFinanceState } from "./finance.js";
-import { pickLatestDailyMemorize } from "./dailyMemorize.js";
+import { resolveDailyMemorize } from "./resolveDailyMemorize.js";
+import { readQuickNotesState } from "./quickNotes.js";
 import { pickLatestSecondPassPlan } from "./secondPassPick.js";
 import { HomeHub } from "./HomeHub.jsx";
 import { NotesWorkspace } from "./NotesWorkspace.jsx";
@@ -222,16 +251,33 @@ function App() {
   const [planPathDone, setPlanPathDone] = useState(() => readPlanPathDone());
   const [studyPathOpen, setStudyPathOpen] = useState(false);
   const [weeklyProgressOpen, setWeeklyProgressOpen] = useState(false);
+  const [studyTimeOpen, setStudyTimeOpen] = useState(false);
+  const [studyTimeYear, setStudyTimeYear] = useState(() => new Date().getFullYear());
+  const [studyTimeMonth, setStudyTimeMonth] = useState(() => new Date().getMonth() + 1);
+  const [studyTimeByDate, setStudyTimeByDate] = useState({});
+  const [studyTimeLoading, setStudyTimeLoading] = useState(false);
+  const [studyTimeError, setStudyTimeError] = useState("");
+  const [studyTimeSelected, setStudyTimeSelected] = useState(() => studyLocalYmd());
+  const [studyTimeTick, setStudyTimeTick] = useState(0);
+  const [studyTimePendingTick, setStudyTimePendingTick] = useState(0);
   const [financeOpen, setFinanceOpen] = useState(false);
   const [schoolTargetsOpen, setSchoolTargetsOpen] = useState(false);
   const [schoolTargetsModalData, setSchoolTargetsModalData] = useState(null);
   const [schoolTargetsModalError, setSchoolTargetsModalError] = useState(null);
-  const [planBoardOverlayOpen, setPlanBoardOverlayOpen] = useState(false);
-  const [planBoardOverlayData, setPlanBoardOverlayData] = useState(null);
-  const [planBoardOverlayError, setPlanBoardOverlayError] = useState(null);
+  const [checklistOverlayOpen, setChecklistOverlayOpen] = useState(false);
+  const [checklistOverlayData, setChecklistOverlayData] = useState(null);
+  const [checklistOverlayError, setChecklistOverlayError] = useState(null);
+  const [checklistOverlayFile, setChecklistOverlayFile] = useState(null);
+  const [checklistOverlayTitle, setChecklistOverlayTitle] = useState("进度规划看板");
+  const [checklistSaving, setChecklistSaving] = useState(false);
   const [dailyMemorizeRaw, setDailyMemorizeRaw] = useState("");
   const [dailyMemorizeErr, setDailyMemorizeErr] = useState("");
   const [dailyMemorizeLoading, setDailyMemorizeLoading] = useState(false);
+  const [dailyMemorizeMeta, setDailyMemorizeMeta] = useState({
+    mode: "empty",
+    sourceLabel: "",
+    ymd: "",
+  });
   const [secondPassRaw, setSecondPassRaw] = useState("");
   const [secondPassErr, setSecondPassErr] = useState("");
   const [secondPassLoading, setSecondPassLoading] = useState(false);
@@ -365,46 +411,63 @@ function App() {
     return groups;
   }, [files]);
 
-  const dailyMemorizeFile = useMemo(
-    () => pickLatestDailyMemorize(files),
-    [files]
-  );
+  const [dailyMemorizeOpenFile, setDailyMemorizeOpenFile] = useState(null);
+  const [quickNotesTick, setQuickNotesTick] = useState(0);
+
+  useEffect(() => {
+    const bump = () => setQuickNotesTick((t) => t + 1);
+    window.addEventListener("smr-quick-notes-changed", bump);
+    const onStorage = (e) => {
+      if (e.key === LS_QUICK_NOTES) bump();
+    };
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener("smr-quick-notes-changed", bump);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, []);
 
   const openDailyMemorizeInReader = useCallback(() => {
-    if (!dailyMemorizeFile) return;
+    if (!dailyMemorizeOpenFile) return;
     if (dirty && activeFile) {
       if (
         !window.confirm(
-          "当前有未保存修改，确定打开「每日要背」对应文件？（可先保存再打开）"
+          "当前有未保存修改，确定打开「每日要背」来源文件？（可先保存再打开）"
         )
       ) {
         return;
       }
     }
     setAppSection("reader");
-    void openFile(dailyMemorizeFile);
-  }, [dailyMemorizeFile, openFile, dirty, activeFile]);
+    void openFile(dailyMemorizeOpenFile);
+  }, [dailyMemorizeOpenFile, openFile, dirty, activeFile]);
 
   useEffect(() => {
-    if (!dailyMemorizeFile) {
-      setDailyMemorizeRaw("");
-      setDailyMemorizeErr("");
-      setDailyMemorizeLoading(false);
-      return;
-    }
     let cancelled = false;
     setDailyMemorizeLoading(true);
     setDailyMemorizeErr("");
     (async () => {
       try {
-        const t = await readMarkdownFileText(dailyMemorizeFile, mode);
+        const result = await resolveDailyMemorize({
+          files,
+          readFile: (f) => readMarkdownFileText(f, mode),
+          quickNotes: readQuickNotesState().notes,
+        });
         if (!cancelled) {
-          setDailyMemorizeRaw(typeof t === "string" ? t : "");
+          setDailyMemorizeRaw(result.markdown || "");
+          setDailyMemorizeMeta({
+            mode: result.mode,
+            sourceLabel: result.sourceLabel || "",
+            ymd: result.ymd || "",
+          });
+          setDailyMemorizeOpenFile(result.openFile || null);
         }
       } catch (e) {
         if (!cancelled) {
           setDailyMemorizeErr(e?.message || "读取失败");
           setDailyMemorizeRaw("");
+          setDailyMemorizeMeta({ mode: "empty", sourceLabel: "", ymd: "" });
+          setDailyMemorizeOpenFile(null);
         }
       } finally {
         if (!cancelled) setDailyMemorizeLoading(false);
@@ -413,7 +476,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [dailyMemorizeFile, mode]);
+  }, [files, mode, quickNotesTick]);
 
   const dailySecondPassFile = useMemo(
     () => pickLatestSecondPassPlan(files),
@@ -519,6 +582,10 @@ function App() {
   );
 
   const mathCatalog = useMemo(() => parseMathCatalog(mathCatalogRaw), [mathCatalogRaw]);
+  const zhangyu1000Catalog = useMemo(
+    () => parseZhangYu1000Catalog(mathCatalogRaw),
+    [mathCatalogRaw]
+  );
   const catalog408 = useMemo(() => parse408Catalog(catalog408Raw), [catalog408Raw]);
   const planPathNodes = useMemo(
     () => parsePlanPathFromMarkdown(planPathRaw),
@@ -571,6 +638,135 @@ function App() {
     setWeeklyProgressOpen(true);
   }, [studyProgress, mathCatalog, catalog408]);
 
+  const dailyReportFiles = useMemo(() => listDailyReportFiles(files), [files]);
+
+  const reloadStudyTimeCalendar = useCallback(async () => {
+    if (!folderPath) {
+      setStudyTimeError("请先在 Markdown 浏览器中打开 Study 根文件夹。");
+      setStudyTimeByDate({});
+      return;
+    }
+    setStudyTimeLoading(true);
+    setStudyTimeError("");
+    const mo = String(studyTimeMonth).padStart(2, "0");
+    const lastDay = new Date(studyTimeYear, studyTimeMonth, 0).getDate();
+    const startStr = `${studyTimeYear}-${mo}-01`;
+    const endStr = `${studyTimeYear}-${mo}-${String(lastDay).padStart(2, "0")}`;
+    const readText = async (fp) => {
+      if (typeof window.electronAPI?.readMarkdownFile === "function") {
+        return window.electronAPI.readMarkdownFile(fp);
+      }
+      const ent = files.find((f) => f.fullPath === fp);
+      if (ent?.fileObject) {
+        return new Promise((resolve, reject) => {
+          const r = new FileReader();
+          r.onload = () => resolve(String(r.result ?? ""));
+          r.onerror = () => reject(new Error("read failed"));
+          r.readAsText(ent.fileObject);
+        });
+      }
+      throw new Error("无法读取文件");
+    };
+    try {
+      const map = await loadStudyTimeByDate(dailyReportFiles, startStr, endStr, readText);
+      let pendingLog = readPendingStudyLog();
+      const pendingPath = resolvePendingStudyTimeFilePath(folderPath);
+      if (pendingPath && typeof window.electronAPI?.readMarkdownFile === "function") {
+        try {
+          const pmd = await window.electronAPI.readMarkdownFile(pendingPath);
+          pendingLog = parsePendingStudyTimeMarkdown(pmd);
+          writePendingStudyLog(pendingLog);
+        } catch {
+          /* 无待同步文件时沿用 localStorage */
+        }
+      }
+      /** @type {typeof map} */
+      const enriched = {};
+      for (const [ymd, data] of Object.entries(map)) {
+        enriched[ymd] = mergeStudyTimeDisplay(
+          data,
+          getPendingBlocksForDate(pendingLog, ymd)
+        );
+      }
+      for (const ymd of Object.keys(pendingLog.days || {})) {
+        if (!enriched[ymd]) {
+          enriched[ymd] = mergeStudyTimeDisplay(
+            { totalMinutes: 0, blocks: [], source: "none" },
+            getPendingBlocksForDate(pendingLog, ymd)
+          );
+        }
+      }
+      setStudyTimeByDate(enriched);
+    } catch (err) {
+      setStudyTimeError(err.message || "读取日报失败");
+      setStudyTimeByDate({});
+    } finally {
+      setStudyTimeLoading(false);
+    }
+  }, [folderPath, studyTimeYear, studyTimeMonth, dailyReportFiles, files, studyTimePendingTick]);
+
+  const persistPendingStudyTime = useCallback(
+    async (log) => {
+      writePendingStudyLog(log);
+      setStudyTimePendingTick((t) => t + 1);
+      if (
+        canNativeSave &&
+        folderPath &&
+        typeof window.electronAPI?.writeMarkdownFile === "function"
+      ) {
+        const targetPath = resolvePendingStudyTimeFilePath(folderPath);
+        if (targetPath) {
+          try {
+            await window.electronAPI.writeMarkdownFile(
+              targetPath,
+              buildPendingStudyTimeMarkdown(log)
+            );
+          } catch {
+            /* 仅 localStorage 亦可 */
+          }
+        }
+      }
+    },
+    [canNativeSave, folderPath]
+  );
+
+  const handleAddQuickThreeHour = useCallback(
+    async (ymd, label) => {
+      const next = addPendingThreeHourBlock(ymd, { label });
+      await persistPendingStudyTime(next);
+      setStudyTimeTick((t) => t + 1);
+    },
+    [persistPendingStudyTime]
+  );
+
+  const handleRemovePendingBlock = useCallback(
+    async (ymd, slotKey) => {
+      const next = removePendingBlock(ymd, slotKey);
+      await persistPendingStudyTime(next);
+      setStudyTimeTick((t) => t + 1);
+    },
+    [persistPendingStudyTime]
+  );
+
+  const handleCopyPendingForAgent = useCallback((ymd) => {
+    const log = readPendingStudyLog();
+    return formatPendingCopyForAgent(ymd, getPendingBlocksForDate(log, ymd));
+  }, [studyTimePendingTick]);
+
+  const openStudyTimeCalendar = useCallback(() => {
+    const today = studyLocalYmd();
+    const [y, m] = today.split("-").map(Number);
+    setStudyTimeYear(y);
+    setStudyTimeMonth(m);
+    setStudyTimeSelected(today);
+    setStudyTimeOpen(true);
+  }, []);
+
+  useEffect(() => {
+    if (!studyTimeOpen) return;
+    reloadStudyTimeCalendar();
+  }, [studyTimeOpen, studyTimeYear, studyTimeMonth, studyTimeTick, reloadStudyTimeCalendar]);
+
   const goReaderHome = useCallback(() => {
     if (dirty && activeFile) {
       if (
@@ -603,7 +799,7 @@ function App() {
       const merged = mergeStudyProgressData(
         structuredClone(DEFAULT_STUDY_PROGRESS),
         next,
-        { math: mathCatalog, cs408: catalog408 }
+        { math: mathCatalog, cs408: catalog408, zhangyu1000: zhangyu1000Catalog }
       );
       setStudyProgress(merged);
       writeStudyProgress(merged);
@@ -630,7 +826,7 @@ function App() {
         }
       }, 400);
     },
-    [canNativeSave, folderPath, studyProgressFileEntry, mathCatalog, catalog408]
+    [canNativeSave, folderPath, studyProgressFileEntry, mathCatalog, catalog408, zhangyu1000Catalog]
   );
 
   const persistVideoProgress = useCallback(
@@ -708,9 +904,10 @@ function App() {
       mergeStudyProgressData(structuredClone(DEFAULT_STUDY_PROGRESS), prev, {
         math: mathCatalog,
         cs408: catalog408,
+        zhangyu1000: zhangyu1000Catalog,
       })
     );
-  }, [mathCatalog, catalog408]);
+  }, [mathCatalog, catalog408, zhangyu1000Catalog]);
 
   useEffect(() => {
     if (!randomQuizOpen || !randomQuizItem) return;
@@ -858,6 +1055,7 @@ function App() {
   useEffect(() => {
     if (
       !weeklyProgressOpen &&
+      !studyTimeOpen &&
       !studyPathOpen &&
       !studyProgressOpen &&
       !videoProgressOpen &&
@@ -865,13 +1063,17 @@ function App() {
       !quizStatsOpen &&
       !financeOpen &&
       !schoolTargetsOpen &&
-      !planBoardOverlayOpen
+      !checklistOverlayOpen
     )
       return;
     const onKey = (e) => {
       if (e.key !== "Escape") return;
       if (financeOpen) {
         setFinanceOpen(false);
+        return;
+      }
+      if (studyTimeOpen) {
+        setStudyTimeOpen(false);
         return;
       }
       if (weeklyProgressOpen) {
@@ -898,8 +1100,8 @@ function App() {
         setSchoolTargetsOpen(false);
         return;
       }
-      if (planBoardOverlayOpen) {
-        setPlanBoardOverlayOpen(false);
+      if (checklistOverlayOpen) {
+        setChecklistOverlayOpen(false);
         return;
       }
       if (randomQuizOpen) setRandomQuizOpen(false);
@@ -908,6 +1110,7 @@ function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [
     weeklyProgressOpen,
+    studyTimeOpen,
     studyPathOpen,
     studyProgressOpen,
     videoProgressOpen,
@@ -915,7 +1118,7 @@ function App() {
     quizStatsOpen,
     financeOpen,
     schoolTargetsOpen,
-    planBoardOverlayOpen,
+    checklistOverlayOpen,
   ]);
 
   useEffect(() => {
@@ -976,6 +1179,7 @@ function App() {
           const next = parseStudyProgressFromMarkdown(md, {
             math: mathCatalog,
             cs408: catalog408,
+            zhangyu1000: zhangyu1000Catalog,
           });
           setStudyProgress(next);
           writeStudyProgress(next);
@@ -986,7 +1190,7 @@ function App() {
             const merged = mergeStudyProgressData(
               structuredClone(DEFAULT_STUDY_PROGRESS),
               readStudyProgress(),
-              { math: mathCatalog, cs408: catalog408 }
+              { math: mathCatalog, cs408: catalog408, zhangyu1000: zhangyu1000Catalog }
             );
             setStudyProgress(merged);
             upsertTodaySnapshot(computeOverallProgressScore(merged, mathCatalog, catalog408));
@@ -1001,12 +1205,13 @@ function App() {
     const merged = mergeStudyProgressData(structuredClone(DEFAULT_STUDY_PROGRESS), readStudyProgress(), {
       math: mathCatalog,
       cs408: catalog408,
+      zhangyu1000: zhangyu1000Catalog,
     });
     setStudyProgress(merged);
     upsertTodaySnapshot(computeOverallProgressScore(merged, mathCatalog, catalog408));
     setSnapshotTick((t) => t + 1);
     return undefined;
-  }, [studyProgressOpen, studyProgressFileEntry?.fullPath, mathCatalog, catalog408]);
+  }, [studyProgressOpen, studyProgressFileEntry?.fullPath, mathCatalog, catalog408, zhangyu1000Catalog]);
 
   useEffect(() => {
     if (!videoProgressOpen) return;
@@ -1060,24 +1265,27 @@ function App() {
     const raw = injectLocalQuestionImages(dailyMemorizeRaw, {}, {
       useSmrImgProtocol: hasApi,
     });
-    return marked.parse(raw);
+    return parseMarkdownWithMath(marked, raw);
   }, [dailyMemorizeRaw, hasApi]);
 
   const homeDailyMemorize = useMemo(
     () => ({
       html: dailyMemorizeHtml,
-      relativePath: dailyMemorizeFile
-        ? normalizeRelPath(dailyMemorizeFile.relativePath)
-        : "",
+      relativePath: dailyMemorizeMeta.sourceLabel || "",
       loading: dailyMemorizeLoading,
       error: dailyMemorizeErr,
-      hasFile: Boolean(dailyMemorizeFile),
+      hasContent: Boolean(dailyMemorizeRaw.trim()),
+      canOpenInReader: Boolean(dailyMemorizeOpenFile),
+      mode: dailyMemorizeMeta.mode,
+      ymd: dailyMemorizeMeta.ymd,
     }),
     [
       dailyMemorizeHtml,
-      dailyMemorizeFile,
+      dailyMemorizeMeta,
       dailyMemorizeLoading,
       dailyMemorizeErr,
+      dailyMemorizeRaw,
+      dailyMemorizeOpenFile,
     ]
   );
 
@@ -1086,7 +1294,7 @@ function App() {
     const raw = injectLocalQuestionImages(secondPassRaw, {}, {
       useSmrImgProtocol: hasApi,
     });
-    return marked.parse(raw);
+    return parseMarkdownWithMath(marked, raw);
   }, [secondPassRaw, hasApi]);
 
   const homeDailySecondPass = useMemo(
@@ -1114,12 +1322,15 @@ function App() {
 
   const showSchoolTargetsDash = Boolean(schoolTargetsData?.groups?.length);
 
-  const planBoardData = useMemo(() => {
-    if (!activeFile || !isPlanBoardFile(activeFile)) return null;
+  const checklistBoardData = useMemo(() => {
+    if (!activeFile || !isChecklistBoardFile(activeFile)) return null;
     return parsePlanBoardMarkdown(content);
   }, [activeFile, content]);
 
-  const showPlanBoardDash = Boolean(planBoardData?.sections?.length);
+  const showChecklistBoardDash = Boolean(checklistBoardData?.sections?.length);
+  const activeChecklistBoardTitle = activeFile
+    ? checklistBoardTitle(activeFile)
+    : "勾选看板";
 
   const randomQuizHtml = useMemo(() => {
     if (!randomQuizItem) return "";
@@ -1130,7 +1341,7 @@ function App() {
     const raw = injectLocalQuestionImages(randomQuizItem.bodyForQuiz || "", map, {
       useSmrImgProtocol: hasApi,
     });
-    return marked.parse(raw);
+    return parseMarkdownWithMath(marked, raw);
   }, [randomQuizItem, randomQuizImageData, hasApi]);
 
   const openWebFile = async (file) => {
@@ -1204,40 +1415,110 @@ function App() {
     }
   }, [files, mode]);
 
-  const openPlanBoardFromHub = useCallback(async () => {
-    setError("");
-    setMessage("");
-    const entry = files.find((f) => isPlanBoardFile(f));
-    if (!entry) {
-      setPlanBoardOverlayError(
-        "未找到「进度规划看板」：请在 Study 根目录下保留 **`周期记录/进度规划看板.md`**（文件名须含「进度规划看板」），并确保已在 Markdown 浏览器中打开该文件夹。"
-      );
-      setPlanBoardOverlayData(null);
-      setPlanBoardOverlayOpen(true);
-      return;
-    }
-    setLoading(true);
-    try {
-      const md = await readMarkdownFileText(entry, mode);
-      const data = parsePlanBoardMarkdown(md);
-      if (!data.sections?.length) {
-        setPlanBoardOverlayError(
-          "文件中未解析到任何 `## 小节标题`；请至少包含「阶段性计划」「本周验收」等章节。"
-        );
-        setPlanBoardOverlayData(null);
-      } else {
-        setPlanBoardOverlayError(null);
-        setPlanBoardOverlayData(data);
+  const openChecklistBoardFromHub = useCallback(
+    async (matcher, title, notFoundMsg) => {
+      setError("");
+      setMessage("");
+      const entry = files.find((f) => matcher(f));
+      if (!entry) {
+        setChecklistOverlayError(notFoundMsg);
+        setChecklistOverlayData(null);
+        setChecklistOverlayFile(null);
+        setChecklistOverlayTitle(title);
+        setChecklistOverlayOpen(true);
+        return;
       }
-      setPlanBoardOverlayOpen(true);
-    } catch (e) {
-      setPlanBoardOverlayError(String(e.message || e));
-      setPlanBoardOverlayData(null);
-      setPlanBoardOverlayOpen(true);
-    } finally {
-      setLoading(false);
-    }
-  }, [files, mode]);
+      setLoading(true);
+      try {
+        const md = await readMarkdownFileText(entry, mode);
+        const data = parsePlanBoardMarkdown(md);
+        if (!data.sections?.length) {
+          setChecklistOverlayError(
+            "文件中未解析到任何 `## 小节标题` 下的 `- [ ]` 条目；请用二级标题分节并写勾选行。"
+          );
+          setChecklistOverlayData(null);
+          setChecklistOverlayFile(entry);
+        } else {
+          setChecklistOverlayError(null);
+          setChecklistOverlayData(data);
+          setChecklistOverlayFile(entry);
+        }
+        setChecklistOverlayTitle(title);
+        setChecklistOverlayOpen(true);
+      } catch (e) {
+        setChecklistOverlayError(String(e.message || e));
+        setChecklistOverlayData(null);
+        setChecklistOverlayFile(null);
+        setChecklistOverlayTitle(title);
+        setChecklistOverlayOpen(true);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [files, mode]
+  );
+
+  const openPlanBoardFromHub = useCallback(
+    () =>
+      openChecklistBoardFromHub(
+        isPlanBoardFile,
+        "进度规划看板",
+        "未找到「进度规划看板」：请保留 周期记录/进度规划看板.md，并用桌面版打开 Study 根目录。"
+      ),
+    [openChecklistBoardFromHub]
+  );
+
+  const openStatusBoardFromHub = useCallback(
+    () =>
+      openChecklistBoardFromHub(
+        isStatusBoardFile,
+        "个人状态情况看板",
+        "未找到「个人状态情况看板」：请保留 周期记录/个人状态情况看板.md，并用桌面版打开 Study 根目录。"
+      ),
+    [openChecklistBoardFromHub]
+  );
+
+  const applyChecklistToggle = useCallback(
+    async (sectionIndex, itemIndex, done, sourceFile) => {
+      const entry = sourceFile;
+      if (!entry) return;
+      if (!canNativeSave || typeof window.electronAPI?.writeMarkdownFile !== "function") {
+        setError("勾选保存需要桌面版并打开 Study 文件夹（浏览器模式请手动改 md）");
+        return;
+      }
+      setChecklistSaving(true);
+      setError("");
+      try {
+        const md =
+          activeFile?.fullPath === entry.fullPath
+            ? content
+            : await readMarkdownFileText(entry, mode);
+        const nextMd = togglePlanBoardItem(md, sectionIndex, itemIndex, done);
+        await window.electronAPI.writeMarkdownFile(entry.fullPath, nextMd);
+        const data = parsePlanBoardMarkdown(nextMd);
+        if (activeFile?.fullPath === entry.fullPath) {
+          setContent(nextMd);
+          setDirty(false);
+        }
+        if (checklistOverlayFile?.fullPath === entry.fullPath) {
+          setChecklistOverlayData(data);
+        }
+        setMessage("已保存勾选");
+      } catch (e) {
+        setError(e?.message || "勾选保存失败");
+      } finally {
+        setChecklistSaving(false);
+      }
+    },
+    [activeFile, content, mode, canNativeSave, checklistOverlayFile]
+  );
+
+  const openChecklistOverlayInReader = useCallback(() => {
+    if (!checklistOverlayFile) return;
+    setChecklistOverlayOpen(false);
+    setAppSection("reader");
+    void openFile(checklistOverlayFile);
+  }, [checklistOverlayFile, openFile]);
 
   const onWebFolderChange = async (event) => {
     const selectedFiles = Array.from(event.target.files || []);
@@ -1330,6 +1611,7 @@ function App() {
         }
       }
       setMessage("UI已刷新");
+      setStudyTimeTick((t) => t + 1);
     } catch (err) {
       setError(err.message || "刷新失败");
     } finally {
@@ -1667,11 +1949,13 @@ function App() {
           onOpenStudyProgress={() => setStudyProgressOpen(true)}
           onOpenVideoProgress={() => setVideoProgressOpen(true)}
           onOpenWeekly={openWeeklyProgress}
+          onOpenStudyTime={openStudyTimeCalendar}
           onOpenPath={() => setStudyPathOpen(true)}
           onOpenQuizStats={() => setQuizStatsOpen(true)}
           onOpenFinance={() => setFinanceOpen(true)}
           onOpenSchoolTargets={openSchoolTargetsFromHub}
           onOpenPlanBoard={openPlanBoardFromHub}
+          onOpenStatusBoard={openStatusBoardFromHub}
           currentScore={weeklyProgressStats.currentScore}
         />
       )}
@@ -1725,6 +2009,9 @@ function App() {
           </button>
           <button type="button" className="topbar-btn topbar-btn--secondary" onClick={openWeeklyProgress}>
             本周进度
+          </button>
+          <button type="button" className="topbar-btn topbar-btn--secondary" onClick={openStudyTimeCalendar}>
+            学习时长
           </button>
           <button type="button" className="topbar-btn topbar-btn--secondary" onClick={() => setStudyProgressOpen(true)}>
             学习进度
@@ -1892,10 +2179,10 @@ function App() {
               {!loading &&
                 !error &&
                 activeFile &&
-                isPlanBoardFile(activeFile) &&
+                isChecklistBoardFile(activeFile) &&
                 viewMode === "edit" && (
                   <p className="hint">
-                    当前为进度规划看板：切换到「预览」或「分栏」可查看勾选进度；勾选请在正文编辑{" "}
+                    当前为{activeChecklistBoardTitle}：切换到「预览」或「分栏」可点击勾选；亦可在正文编辑{" "}
                     <code>- [ ]</code> / <code>- [x]</code>。
                   </p>
                 )}
@@ -1919,13 +2206,25 @@ function App() {
 
             {!loading && !error && activeFile && viewMode === "preview" && (
               <div className="viewer-preview-stack viewer-fill">
-                {showPlanBoardDash && <PlanBoardDashboard data={planBoardData} />}
+                {showChecklistBoardDash && (
+                  <PlanBoardDashboard
+                    data={checklistBoardData}
+                    title={activeChecklistBoardTitle}
+                    interactive={canNativeSave}
+                    saving={checklistSaving}
+                    onToggleItem={(si, ii, done) =>
+                      applyChecklistToggle(si, ii, done, activeFile)
+                    }
+                  />
+                )}
                 {showSchoolTargetsDash && (
                   <SchoolTargetsDashboard data={schoolTargetsData} />
                 )}
                 <article
                   className="markdown viewer-fill viewer-markdown-scroll"
-                  dangerouslySetInnerHTML={{ __html: marked.parse(previewMarkdown || "") }}
+                  dangerouslySetInnerHTML={{
+                    __html: parseMarkdownWithMath(marked, previewMarkdown || ""),
+                  }}
                 />
               </div>
             )}
@@ -1958,14 +2257,24 @@ function App() {
                   style={{ flex: `${1 - splitRatio} 1 0%` }}
                 >
                   <div className="viewer-preview-stack viewer-fill">
-                    {showPlanBoardDash && <PlanBoardDashboard data={planBoardData} />}
+                    {showChecklistBoardDash && (
+                  <PlanBoardDashboard
+                    data={checklistBoardData}
+                    title={activeChecklistBoardTitle}
+                    interactive={canNativeSave}
+                    saving={checklistSaving}
+                    onToggleItem={(si, ii, done) =>
+                      applyChecklistToggle(si, ii, done, activeFile)
+                    }
+                  />
+                )}
                     {showSchoolTargetsDash && (
                       <SchoolTargetsDashboard data={schoolTargetsData} />
                     )}
                     <article
                       className="markdown viewer-fill viewer-markdown-scroll"
                       dangerouslySetInnerHTML={{
-                        __html: marked.parse(previewMarkdown || ""),
+                        __html: parseMarkdownWithMath(marked, previewMarkdown || ""),
                       }}
                     />
                   </div>
@@ -2186,6 +2495,7 @@ function App() {
           onClose={() => setStudyProgressOpen(false)}
           sourceHint={progressSourceHint}
           mathCatalog={mathCatalog}
+          zhangyu1000Catalog={zhangyu1000Catalog}
           catalog408={catalog408}
           catalogHint={progressCatalogHint}
         />
@@ -2219,6 +2529,41 @@ function App() {
         />
       )}
 
+      {studyTimeOpen && (
+        <StudyTimeCalendarDashboard
+          year={studyTimeYear}
+          month={studyTimeMonth}
+          byDate={studyTimeByDate}
+          loading={studyTimeLoading}
+          error={studyTimeError}
+          selectedDate={studyTimeSelected}
+          onSelectDate={setStudyTimeSelected}
+          onPrevMonth={() => {
+            if (studyTimeMonth <= 1) {
+              setStudyTimeYear((y) => y - 1);
+              setStudyTimeMonth(12);
+            } else setStudyTimeMonth((m) => m - 1);
+          }}
+          onNextMonth={() => {
+            if (studyTimeMonth >= 12) {
+              setStudyTimeYear((y) => y + 1);
+              setStudyTimeMonth(1);
+            } else setStudyTimeMonth((m) => m + 1);
+          }}
+          onRefresh={() => setStudyTimeTick((t) => t + 1)}
+          folderHint={folderPath ? `已绑定：${folderPath}` : ""}
+          onClose={() => setStudyTimeOpen(false)}
+          onAddQuickThreeHour={handleAddQuickThreeHour}
+          onRemovePendingBlock={handleRemovePendingBlock}
+          onCopyPendingForAgent={handleCopyPendingForAgent}
+          pendingSyncHint={
+            canNativeSave && folderPath
+              ? "已同步至 周期记录/学习时长待同步.md"
+              : "仅本机浏览器缓存（请打开 Study 文件夹以写盘）"
+          }
+        />
+      )}
+
       {weeklyProgressOpen && (
         <WeeklyProgressDashboard
           currentScore={weeklyProgressStats.currentScore}
@@ -2241,34 +2586,46 @@ function App() {
         />
       )}
 
-      {planBoardOverlayOpen && (
+      {checklistOverlayOpen && (
         <div
           className="quiz-stats-overlay"
           role="dialog"
           aria-modal="true"
-          aria-labelledby="plan-board-overlay-title"
+          aria-labelledby="checklist-overlay-title"
         >
-          <div className="quiz-stats-panel">
+          <div className="quiz-stats-panel quiz-stats-panel--wide">
             <div className="quiz-stats-toolbar">
-              <h2 id="plan-board-overlay-title" className="quiz-stats-title">
-                进度规划看板
+              <h2 id="checklist-overlay-title" className="quiz-stats-title">
+                {checklistOverlayTitle}
               </h2>
               <div className="quiz-stats-toolbar-btns">
                 <button
                   type="button"
                   className="ghost-btn"
-                  onClick={() => setPlanBoardOverlayOpen(false)}
+                  onClick={() => setChecklistOverlayOpen(false)}
                 >
                   关闭（Esc）
                 </button>
               </div>
             </div>
-            {planBoardOverlayError ? (
-              <p className="quiz-stats-empty">{planBoardOverlayError}</p>
+            {checklistOverlayError ? (
+              <p className="quiz-stats-empty">{checklistOverlayError}</p>
             ) : null}
-            {planBoardOverlayData?.sections?.length ? (
-              <PlanBoardDashboard data={planBoardOverlayData} embedded />
-            ) : !planBoardOverlayError ? (
+            {checklistOverlayData?.sections?.length ? (
+              <PlanBoardDashboard
+                data={checklistOverlayData}
+                title={checklistOverlayTitle}
+                embedded
+                interactive={canNativeSave}
+                saving={checklistSaving}
+                onToggleItem={(si, ii, done) =>
+                  applyChecklistToggle(si, ii, done, checklistOverlayFile)
+                }
+                onOpenInEditor={
+                  checklistOverlayFile ? openChecklistOverlayInReader : undefined
+                }
+              />
+            ) : !checklistOverlayError ? (
               <p className="quiz-stats-empty">暂无小节数据。</p>
             ) : null}
           </div>

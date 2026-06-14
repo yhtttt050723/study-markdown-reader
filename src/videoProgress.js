@@ -1,11 +1,12 @@
 import { normalizeRelPath } from "./markdownQuiz.js";
 import { LS_VIDEO_PROGRESS, tryGetLocalStorage, trySetLocalStorage } from "./storageKeys.js";
+import { labelFromBvMarkdown } from "./seriesLabel.js";
 
 /** Markdown 中 JSON 代码块语言标记 */
 export const VIDEO_PROGRESS_FENCE = "smr-video-progress";
 
 /**
- * @typedef {{ bvid: string, label: string, detailRelPath: string, totalSeconds?: number }} VideoSeriesRef
+ * @typedef {{ bvid: string, label: string, detailRelPath: string, totalSeconds?: number, creditedWatchedSeconds?: number }} VideoSeriesRef
  * @typedef {{ dailyLog: Record<string, number>, series: VideoSeriesRef[] }} VideoProgressData
  */
 
@@ -65,11 +66,16 @@ function normalizeSeriesEntry(row) {
     typeof row.detailRelPath === "string" ? row.detailRelPath.trim().replace(/\//g, "\\") : "";
   if (!bvid || !detailRelPath) return null;
   const totalSeconds = Math.floor(Number(row.totalSeconds));
+  const creditedWatchedSeconds = Math.floor(Number(row.creditedWatchedSeconds));
   return {
     bvid,
     label: label || bvid,
     detailRelPath,
     totalSeconds: Number.isFinite(totalSeconds) && totalSeconds > 0 ? totalSeconds : undefined,
+    creditedWatchedSeconds:
+      Number.isFinite(creditedWatchedSeconds) && creditedWatchedSeconds >= 0
+        ? creditedWatchedSeconds
+        : undefined,
   };
 }
 
@@ -97,6 +103,54 @@ export function mergeVideoProgressData(base, patch) {
   }
   const series = Array.from(byBvid.values());
   return { dailyLog, series };
+}
+
+const SKIP_BV_MD = new Set(["总览.md", "视频进度看板数据.md"]);
+
+/**
+ * 从 BV 详情 md 文本推断可读课程名（需调用方传入 content）。
+ * @param {string} md
+ * @param {string} bvid
+ * @param {string} fallbackLabel
+ */
+export function seriesLabelFromMarkdown(md, bvid, fallbackLabel) {
+  return labelFromBvMarkdown(md, bvid, fallbackLabel);
+}
+
+/**
+ * 从 Study 根目录 markdown 文件列表中发现 BV 系列（仅文件名；有 content 时用 seriesLabelFromMarkdown）。
+ * @param {Array<{ name?: string, relativePath?: string, content?: string }>} files
+ * @returns {VideoSeriesRef[]}
+ */
+export function discoverSeriesFromStudyMarkdownFiles(files) {
+  const byBvid = new Map();
+  for (const f of files || []) {
+    const name = f.name || "";
+    if (!name.toLowerCase().endsWith(".md")) continue;
+    if (SKIP_BV_MD.has(name)) continue;
+    const rp = normalizeRelPath(f.relativePath || "");
+    if (!rp.includes("学习视频进度")) continue;
+    const m = name.match(/^(BV[\w]+)/i);
+    if (!m) continue;
+    const bvid = m[1];
+    const rest = name.replace(/^BV[\w]+-?/i, "").replace(/\.md$/i, "").trim();
+    const fallback = rest && rest.toLowerCase() !== "video-dash" ? rest : bvid;
+    const label =
+      typeof f.content === "string" && f.content.trim()
+        ? labelFromBvMarkdown(f.content, bvid, fallback)
+        : fallback;
+    const detailRelPath = rp.replace(/\//g, "\\");
+    byBvid.set(bvid, { bvid, label, detailRelPath });
+  }
+  return Array.from(byBvid.values());
+}
+
+/**
+ * @param {VideoProgressData} data
+ * @param {VideoSeriesRef[]} discovered
+ */
+export function mergeDiscoveredSeries(data, discovered) {
+  return mergeVideoProgressData(data, { series: discovered });
 }
 
 export function readVideoProgress() {
@@ -146,8 +200,8 @@ export function buildVideoProgressMarkdown(data) {
 
 本文件由 Study Markdown Reader **视频进度看板** 读写。下方 \`${VIDEO_PROGRESS_FENCE}\` 代码块中：
 
-- **dailyLog**：自然日 **YYYY-MM-DD → 当日看视频学习分钟数**（手改或看板内改），用于与「本周进度」相同的 **最近 7 日**窗口汇总「本周观看时长」。
-- **series**：每个 B 站稿件一条，**detailRelPath** 指向同目录下的 BV 详情（分 P 勾选 + **（秒数）** 由 MDC / 助手从接口写入）。
+- **dailyLog**：自然日 **YYYY-MM-DD → 当日看视频学习分钟数**（手改、看板内改，或 **video-dash 勾选新分 P 时自动累加**）。
+- **series**：每个 B 站稿件一条，**detailRelPath** 指向 BV 详情；**creditedWatchedSeconds** 为已计入 dailyLog 的勾选秒数（避免重复累计）。
 
 \`\`\`${VIDEO_PROGRESS_FENCE}
 ${json}
@@ -193,4 +247,69 @@ export function enumerateDatesInclusive(startStr, endStr) {
     cur = addOneDay(cur);
   }
   return out;
+}
+
+function todayYmdLocal() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * 将勾选增量计入 dailyLog；首次见到某 BV 仅建立 baseline，不灌入历史勾选。
+ * @param {VideoProgressData} data
+ * @param {Array<{ bvid: string, label?: string, detailRelPath?: string, watchedSeconds: number, totalSeconds?: number }>} updates
+ * @param {string} [dateStr]
+ * @param {{ forceUncredited?: boolean }} [opts] forceUncredited=true 时把尚未 credited 的已勾选全部记入当日（用于首次对齐）
+ */
+export function creditWatchedDeltaToDailyLog(data, updates, dateStr = todayYmdLocal(), opts = {}) {
+  const forceUncredited = Boolean(opts.forceUncredited);
+  const dailyLog = { ...data.dailyLog };
+  const byBvid = new Map();
+  for (const s of data.series || []) {
+    byBvid.set(s.bvid, { ...s });
+  }
+  let addedMinutes = 0;
+
+  for (const u of updates) {
+    if (!u?.bvid) continue;
+    const prev = byBvid.get(u.bvid) || {
+      bvid: u.bvid,
+      label: u.label || u.bvid,
+      detailRelPath: u.detailRelPath || "",
+    };
+    const credited = Math.max(0, Math.floor(Number(prev.creditedWatchedSeconds) || 0));
+    const watched = Math.max(0, Math.floor(Number(u.watchedSeconds) || 0));
+
+    if (prev.creditedWatchedSeconds == null) {
+      if (forceUncredited && watched > 0) {
+        addedMinutes += Math.round(watched / 60);
+        prev.creditedWatchedSeconds = watched;
+      } else {
+        prev.creditedWatchedSeconds = watched;
+      }
+    } else {
+      const delta = Math.max(0, watched - credited);
+      if (delta > 0) {
+        addedMinutes += Math.round(delta / 60);
+        prev.creditedWatchedSeconds = watched;
+      }
+    }
+    if (u.label) prev.label = u.label;
+    if (u.detailRelPath) prev.detailRelPath = u.detailRelPath;
+    if (u.totalSeconds > 0) prev.totalSeconds = Math.floor(u.totalSeconds);
+    byBvid.set(u.bvid, prev);
+  }
+
+  if (addedMinutes > 0) {
+    const today = dateStr;
+    dailyLog[today] = Math.min(24 * 60, (dailyLog[today] || 0) + addedMinutes);
+  }
+
+  return {
+    data: { dailyLog, series: Array.from(byBvid.values()) },
+    addedMinutes,
+  };
 }

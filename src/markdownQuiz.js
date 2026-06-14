@@ -30,7 +30,7 @@ const STUDY_ROOT_MOVED_FIRST_SEGMENTS = new Set([
 export function canonicalImagePathForRead(p) {
   let s = (p || "").trim();
   if (!s) return s;
-  s = s.replace(/^["']+|["']+$/g, "");
+  s = s.replace(/^[`'"]+|[`'"]+$/g, "");
   if (/^file:\/\//i.test(s)) {
     s = s.replace(/^file:\/\/\/+/i, "").replace(/\//g, "\\");
   }

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { marked } from "marked";
+import { parseMarkdownWithMath } from "./markdownRender.js";
+import { NoteSubjectIcon } from "./noteSubjectIcons.jsx";
 import { localImageProtocolUrlFromRaw } from "./markdownQuiz.js";
 import {
   newNoteId,
@@ -12,9 +14,16 @@ import { WorkspaceBackBar } from "./WorkspaceChrome.jsx";
 import { NoteKnowledgeMap, buildTreeFromNotes } from "./NoteKnowledgeMap.jsx";
 import {
   LS_NOTES_EDITOR_RATIO,
+  LS_NOTES_TAB_COMPLETE,
   readStoredNumber,
   trySetLocalStorage,
 } from "./storageKeys.js";
+import { localYmd } from "./studyDailyTime.js";
+import {
+  fetchNoteCompletion,
+  isTabCompleteEnabled,
+  setTabCompleteEnabled,
+} from "./noteTabComplete.js";
 import { mergeQuizWrongIntoQuickNotes } from "./quizNotesSync.js";
 import {
   insertCodeFenceAtSelection,
@@ -93,6 +102,9 @@ export function NotesWorkspace({ onBack }) {
   const textareaRef = useRef(null);
   const notesEditorSplitRef = useRef(null);
   const insertCaretRef = useRef(null);
+  const completeAbortRef = useRef(null);
+  const completeDebounceRef = useRef(null);
+  const cursorPosRef = useRef(0);
 
   const [notesEditorRatio, setNotesEditorRatio] = useState(() =>
     readStoredNumber(LS_NOTES_EDITOR_RATIO, 0.72, 0.38, 0.9)
@@ -115,6 +127,10 @@ export function NotesWorkspace({ onBack }) {
   const [kbBusy, setKbBusy] = useState(false);
   /** Ctrl+S：拦截默认「保存网页」，笔记仍由 state→localStorage 自动持久化 */
   const [saveShortcutHint, setSaveShortcutHint] = useState(null);
+  const [tabCompleteOn, setTabCompleteOn] = useState(() => isTabCompleteEnabled());
+  const [completeSuggestion, setCompleteSuggestion] = useState("");
+  const [completeBusy, setCompleteBusy] = useState(false);
+  const [completeHint, setCompleteHint] = useState("");
 
   useEffect(() => {
     writeQuickNotesState(state);
@@ -226,7 +242,7 @@ export function NotesWorkspace({ onBack }) {
 
   const splitPreviewHtml = useMemo(() => {
     try {
-      return marked.parse(active?.body ?? "");
+      return parseMarkdownWithMath(marked, active?.body ?? "");
     } catch {
       return "<p>预览解析失败</p>";
     }
@@ -260,7 +276,13 @@ export function NotesWorkspace({ onBack }) {
       if (!active || preview || panel !== "edit") return;
       const body = active.body ?? "";
       const { start, end } = getEditorSelection();
-      const { nextBody, caret } = insertSubjectBlockAtSelection(body, start, end, title);
+      const { nextBody, caret } = insertSubjectBlockAtSelection(
+        body,
+        start,
+        end,
+        title,
+        localYmd(),
+      );
       insertCaretRef.current = caret;
       updateActiveBody(nextBody);
     },
@@ -545,6 +567,141 @@ export function NotesWorkspace({ onBack }) {
     }
   };
 
+  const toggleTabComplete = useCallback(() => {
+    setTabCompleteOn((prev) => {
+      const next = !prev;
+      setTabCompleteEnabled(next);
+      trySetLocalStorage(LS_NOTES_TAB_COMPLETE, next ? "1" : "0");
+      if (!next) {
+        completeAbortRef.current?.abort();
+        setCompleteSuggestion("");
+        setCompleteHint("");
+      }
+      return next;
+    });
+  }, []);
+
+  const acceptCompleteSuggestion = useCallback(() => {
+    if (!completeSuggestion || !active) return false;
+    const body = active.body ?? "";
+    const start = cursorPosRef.current;
+    const end = start;
+    const { nextBody, caret } = replaceSelection(body, start, end, completeSuggestion);
+    insertCaretRef.current = caret;
+    updateActiveBody(nextBody);
+    setCompleteSuggestion("");
+    setCompleteHint("");
+    return true;
+  }, [active, completeSuggestion, updateActiveBody]);
+
+  const requestNoteCompletion = useCallback(
+    async (force = false) => {
+      if (!active || !kbOllama || !tabCompleteOn || preview || panel !== "edit") return;
+      const ta = textareaRef.current;
+      if (!ta) return;
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      cursorPosRef.current = start;
+      if (start !== end && !force) return;
+
+      completeAbortRef.current?.abort();
+      const ac = new AbortController();
+      completeAbortRef.current = ac;
+      setCompleteBusy(true);
+      setCompleteHint(force ? "本地模型续写中…" : "预读上下文…");
+      try {
+        const fullBody = active.body ?? "";
+        const text = await fetchNoteCompletion(
+          {
+            title: active.title,
+            prefix: fullBody.slice(0, start),
+            suffix: fullBody.slice(start),
+          },
+          ac.signal,
+        );
+        if (ac.signal.aborted) return;
+        if (!text) {
+          setCompleteSuggestion("");
+          setCompleteHint("模型未给出续写（可换行或写几个字再 Tab）");
+          return;
+        }
+        setCompleteSuggestion(text);
+        setCompleteHint("Tab 采纳 · Esc 取消");
+      } catch (e) {
+        if (e?.name === "AbortError") return;
+        setCompleteSuggestion("");
+        setCompleteHint(String(e.message || e));
+      } finally {
+        if (!ac.signal.aborted) setCompleteBusy(false);
+      }
+    },
+    [active, kbOllama, tabCompleteOn, preview, panel],
+  );
+
+  const scheduleNoteCompletion = useCallback(() => {
+    if (!kbOllama || !tabCompleteOn || preview || panel !== "edit") return;
+    clearTimeout(completeDebounceRef.current);
+    setCompleteSuggestion("");
+    completeAbortRef.current?.abort();
+    completeDebounceRef.current = window.setTimeout(() => {
+      void requestNoteCompletion(false);
+    }, 1400);
+  }, [kbOllama, tabCompleteOn, preview, panel, requestNoteCompletion]);
+
+  const handleNoteEditorChange = useCallback(
+    (value) => {
+      updateActiveBody(value);
+      const ta = textareaRef.current;
+      if (ta) cursorPosRef.current = ta.selectionStart;
+      scheduleNoteCompletion();
+    },
+    [updateActiveBody, scheduleNoteCompletion],
+  );
+
+  const handleNoteEditorSelect = useCallback(() => {
+    const ta = textareaRef.current;
+    if (ta) cursorPosRef.current = ta.selectionStart;
+  }, []);
+
+  const handleNoteEditorKeyDown = useCallback(
+    (e) => {
+      if (!kbOllama || !tabCompleteOn || preview || panel !== "edit") return;
+      if (e.key === "Tab" && !e.shiftKey) {
+        e.preventDefault();
+        if (completeSuggestion) {
+          acceptCompleteSuggestion();
+        } else {
+          void requestNoteCompletion(true);
+        }
+        return;
+      }
+      if (e.key === "Escape" && (completeSuggestion || completeBusy)) {
+        e.preventDefault();
+        completeAbortRef.current?.abort();
+        setCompleteSuggestion("");
+        setCompleteHint("");
+        setCompleteBusy(false);
+      }
+    },
+    [
+      kbOllama,
+      tabCompleteOn,
+      preview,
+      panel,
+      completeSuggestion,
+      completeBusy,
+      acceptCompleteSuggestion,
+      requestNoteCompletion,
+    ],
+  );
+
+  useEffect(() => {
+    setCompleteSuggestion("");
+    setCompleteHint("");
+    completeAbortRef.current?.abort();
+    clearTimeout(completeDebounceRef.current);
+  }, [active?.id, preview, panel]);
+
   return (
     <div className="notes-workspace">
       <WorkspaceBackBar onBack={onBack} title="学习笔记 · 知识库">
@@ -581,6 +738,16 @@ export function NotesWorkspace({ onBack }) {
             <span className="notes-kb-pill notes-kb-pill--on" title="本机 Ollama，可用于一键生成标签">
               Ollama · {kbOllamaModel || "已就绪"}
             </span>
+          )}
+          {kbOllama && (
+            <label className="notes-tab-complete-toggle" title="停笔约 1.4s 自动预读；Tab 采纳续写">
+              <input
+                type="checkbox"
+                checked={tabCompleteOn}
+                onChange={toggleTabComplete}
+              />
+              Tab 补全
+            </label>
           )}
           <button
             type="button"
@@ -846,7 +1013,7 @@ export function NotesWorkspace({ onBack }) {
                 <div
                   className="markdown notes-preview-pane"
                   dangerouslySetInnerHTML={{
-                    __html: marked.parse(active.body || ""),
+                    __html: parseMarkdownWithMath(marked, active.body || ""),
                   }}
                 />
               </>
@@ -981,33 +1148,45 @@ export function NotesWorkspace({ onBack }) {
                       图片
                     </button>
                   </div>
-                  <label className="notes-insert-field">
-                    <span>科目块</span>
-                    <select
-                      className="notes-insert-select"
-                      defaultValue=""
-                      key={`subj-${state.activeId}`}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        e.target.value = "";
-                        if (!v) return;
-                        if (v === "__custom__") {
+                  <div
+                    className="notes-insert-group notes-insert-group--subjects"
+                    role="group"
+                    aria-label="科目块"
+                  >
+                    <span className="notes-insert-group-label">科目块</span>
+                    <div className="notes-subject-picks">
+                      {NOTE_SUBJECT_BLOCK_PRESETS.map((preset) => (
+                        <button
+                          key={preset.title}
+                          type="button"
+                          className="notes-subject-pick"
+                          data-icon={preset.icon}
+                          title={`插入 ## 📌 ${preset.title}`}
+                          onClick={() => insertSubjectBlock(preset.title)}
+                        >
+                          <span className="notes-subject-pick-icon" aria-hidden="true">
+                            <NoteSubjectIcon iconKey={preset.icon} />
+                          </span>
+                          <span className="notes-subject-pick-label">{preset.short}</span>
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        className="notes-subject-pick notes-subject-pick--custom"
+                        data-icon="custom"
+                        title="自定义科目块标题"
+                        onClick={() => {
                           const t = window.prompt("自定义块标题（将写入 ## 📌 …）", "");
                           if (t && t.trim()) insertSubjectBlock(t.trim());
-                          return;
-                        }
-                        insertSubjectBlock(v);
-                      }}
-                    >
-                      <option value="">选择…</option>
-                      {NOTE_SUBJECT_BLOCK_PRESETS.map((s) => (
-                        <option key={s} value={s}>
-                          {s}
-                        </option>
-                      ))}
-                      <option value="__custom__">自定义…</option>
-                    </select>
-                  </label>
+                        }}
+                      >
+                        <span className="notes-subject-pick-icon" aria-hidden="true">
+                          <NoteSubjectIcon iconKey="custom" />
+                        </span>
+                        <span className="notes-subject-pick-label">自定义</span>
+                      </button>
+                    </div>
+                  </div>
                   <label className="notes-insert-field">
                     <span>代码块</span>
                     <select
@@ -1039,11 +1218,34 @@ export function NotesWorkspace({ onBack }) {
                       ref={textareaRef}
                       className="notes-textarea notes-textarea--in-split"
                       value={active.body ?? ""}
-                      onChange={(e) => updateActiveBody(e.target.value)}
+                      onChange={(e) => handleNoteEditorChange(e.target.value)}
+                      onSelect={handleNoteEditorSelect}
+                      onKeyUp={handleNoteEditorSelect}
+                      onClick={handleNoteEditorSelect}
+                      onKeyDown={handleNoteEditorKeyDown}
                       onPaste={handleNoteImagePaste}
-                      placeholder={"支持 Markdown。左侧编辑，右侧实时预览；桌面版可粘贴截图。"}
+                      placeholder={
+                        kbOllama && tabCompleteOn
+                          ? "支持 Markdown。Ollama 已连接：停笔自动预读，Tab 采纳续写。"
+                          : "支持 Markdown。左侧编辑，右侧实时预览；桌面版可粘贴截图。"
+                      }
                       spellCheck={false}
                     />
+                    {(completeHint || completeSuggestion) && tabCompleteOn && kbOllama ? (
+                      <div className="notes-complete-bar" aria-live="polite">
+                        {completeBusy ? (
+                          <span className="notes-complete-status">{completeHint || "续写中…"}</span>
+                        ) : completeSuggestion ? (
+                          <>
+                            <span className="notes-complete-label">建议续写</span>
+                            <span className="notes-complete-ghost">{completeSuggestion}</span>
+                            <span className="notes-complete-status">{completeHint}</span>
+                          </>
+                        ) : (
+                          <span className="notes-complete-status">{completeHint}</span>
+                        )}
+                      </div>
+                    ) : null}
                   </div>
                   <div
                     className="layout-gutter layout-gutter-split"

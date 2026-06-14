@@ -2,13 +2,16 @@
  * 学习笔记 · 方案 A：以 `## …` 为块边界；插入科目块与 fenced code。
  */
 
-/** 插入「科目块」时的预设标题（不含 ## 前缀） */
+/** 插入「科目块」时的预设（title 写入 `## 📌 …`，icon 对应 noteSubjectIcons） */
 export const NOTE_SUBJECT_BLOCK_PRESETS = [
-  "数据结构",
-  "高数",
-  "概率论",
-  "线代",
-  "408-综合",
+  { title: "数据结构", icon: "ds", short: "数结" },
+  { title: "计算机组成", icon: "co", short: "计组" },
+  { title: "计算机网络", icon: "net", short: "计网" },
+  { title: "操作系统", icon: "os", short: "OS" },
+  { title: "高数", icon: "calc", short: "高数" },
+  { title: "概率论", icon: "prob", short: "概率" },
+  { title: "线代", icon: "linalg", short: "线代" },
+  { title: "408-综合", icon: "408", short: "408" },
 ];
 
 /** 插入代码块时的语言标识（fenced code 第一行） */
@@ -67,10 +70,12 @@ export function replaceSelection(body, start, end, insertText) {
 
 /**
  * @param {string} title 块标题（写入 `## 📌 …`）
+ * @param {string} [dateYmd] 可选日期，写入 ` · YYYY-MM-DD` 便于每日要背抽取
  */
-export function buildSubjectBlockSnippet(title) {
+export function buildSubjectBlockSnippet(title, dateYmd) {
   const t = String(title || "").trim() || "未命名";
-  return `## 📌 ${t}\n\n`;
+  const d = dateYmd && /^\d{4}-\d{2}-\d{2}$/.test(String(dateYmd)) ? ` · ${dateYmd}` : "";
+  return `## 📌 ${t}${d}\n\n`;
 }
 
 /**
@@ -93,9 +98,9 @@ export function buildCodeFenceSnippet(lang) {
  * @param {number} end
  * @param {string} title
  */
-export function insertSubjectBlockAtSelection(body, start, end, title) {
+export function insertSubjectBlockAtSelection(body, start, end, title, dateYmd) {
   const lead = leadingNewlineIfNeeded(body, start);
-  const block = buildSubjectBlockSnippet(title);
+  const block = buildSubjectBlockSnippet(title, dateYmd);
   const insertText = lead + block;
   const { nextBody, caret } = replaceSelection(body, start, end, insertText);
   return { nextBody, caret };

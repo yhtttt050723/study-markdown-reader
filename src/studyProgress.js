@@ -38,6 +38,15 @@ export const MATH_CHAPTER_DEFAULT_MAX = {
   概率论: 8,
 };
 
+/** 《张宇1000题》无目录块时的默认章数（与 Math.mdc 张宇1000 分篇一致） */
+export const BOOK1000_DEFAULT_MAX = {
+  高数: { 基础: 19, 强化: 18 },
+  线代: { 基础: 6, 强化: 9 },
+  概率论: { 基础: 6, 强化: 9 },
+};
+
+export const BOOK1000_COMPREHENSIVE_TOTAL = 4;
+
 export const CS408_CHAPTER_DEFAULT_MAX = {
   机组: 7,
   数据结构: 8,
@@ -52,7 +61,11 @@ export const CS408_CHAPTER_DEFAULT_MAX = {
  *   book660Through?: number,
  *   book660Total?: number,
  *   book660Caption?: string,
+ *   book1000BasicThrough?: number,
+ *   book1000StrengthenThrough?: number,
+ *   book1000Caption?: string,
  * }} MathSubjectProgress
+ * @typedef {{ comprehensiveThrough: number, comprehensiveTotal?: number }} ZhangYu1000ComprehensiveProgress
  * @typedef {{ through: number }} Cs408SubjectProgress
  */
 
@@ -63,6 +76,9 @@ export const BOOK660_DEFAULT_TOTAL_CALC = 360;
  * basicThrough / strengthenThrough：按红书基础篇 / 严选题 **已过章节数**（0～目录章数，与章节条目对齐）。
  * book660Through / book660Total：《660》当前分册已做题数 / 本分册总题数（高数默认总题数 360；`book660Total: 0` 表示不在看板显示该科 660 条）。
  * book660Caption：看板「《660》」条下说明文字（可选，如已过至章节）。
+ * book1000BasicThrough / book1000StrengthenThrough：《张宇1000题》基础篇 / 强化篇已过章节数（与 Math.mdc 张宇1000 目录对齐）。
+ * book1000Caption：看板「《张宇1000》」说明（可选）。
+ * zhangyu1000.comprehensiveThrough：综合篇测试卷已过数量（0–4）。
  * cs408.through：408 单科基础已过章节数。
  */
 export const DEFAULT_STUDY_PROGRESS = {
@@ -96,6 +112,10 @@ export const DEFAULT_STUDY_PROGRESS = {
   english: {
     mustWords: { round1Unit: 0, round2Unit: 0 },
     basicWords: { round1Unit: 0, round2Unit: 0 },
+  },
+  zhangyu1000: {
+    comprehensiveThrough: 0,
+    comprehensiveTotal: BOOK1000_COMPREHENSIVE_TOTAL,
   },
 };
 
@@ -133,6 +153,44 @@ function maxCh408(key, chapters) {
  * @param {string} key 高数 | 线代 | 概率论
  * @param {Record<string, unknown>} pr
  */
+/**
+ * @param {string} key
+ * @param {Record<string, unknown>} pr
+ * @param {import('./studyCatalog.js').ZhangYuSubjectPhases|undefined} zy
+ */
+function normalizeBook1000(key, pr, zy) {
+  const def = BOOK1000_DEFAULT_MAX[key] ?? { 基础: 0, 强化: 0 };
+  const basicMax =
+    zy?.基础?.length > 0 ? zy.基础.length : def.基础;
+  const strengthenMax =
+    zy?.强化?.length > 0 ? zy.强化.length : def.强化;
+  const showBasic = basicMax > 0;
+  const showStrengthen = strengthenMax > 0;
+  const book1000BasicThrough = showBasic
+    ? clampUnit(pr.book1000BasicThrough ?? 0, basicMax)
+    : 0;
+  const book1000StrengthenThrough = showStrengthen
+    ? clampUnit(pr.book1000StrengthenThrough ?? 0, strengthenMax)
+    : 0;
+  const cap = pr.book1000Caption;
+  const book1000Caption = typeof cap === "string" ? cap.trim() : "";
+  return { book1000BasicThrough, book1000StrengthenThrough, book1000Caption };
+}
+
+function normalizeZhangYuComprehensive(patch, comprehensiveChapters) {
+  const base = DEFAULT_STUDY_PROGRESS.zhangyu1000;
+  const row = patch && typeof patch === "object" ? patch : {};
+  const totalRaw = Math.floor(Number(row.comprehensiveTotal));
+  const total =
+    comprehensiveChapters?.length > 0
+      ? comprehensiveChapters.length
+      : Number.isFinite(totalRaw) && totalRaw > 0
+        ? totalRaw
+        : BOOK1000_COMPREHENSIVE_TOTAL;
+  const through = clampUnit(row.comprehensiveThrough ?? base.comprehensiveThrough, total);
+  return { comprehensiveThrough: through, comprehensiveTotal: total };
+}
+
 function normalizeBook660(key, pr) {
   const explicitTotal = Math.floor(Number(pr.book660Total));
   const defaultTotal = key === "高数" ? BOOK660_DEFAULT_TOTAL_CALC : 0;
@@ -148,10 +206,11 @@ function normalizeBook660(key, pr) {
   return { book660Total, book660Through, book660Caption };
 }
 
-function normalizeMathRow(key, row, chapters) {
+function normalizeMathRow(key, row, chapters, zhangyuSlice) {
   const max = maxChForMath(key, chapters);
   const pr = row && typeof row === "object" ? row : {};
   const b660 = normalizeBook660(key, pr);
+  const b1000 = normalizeBook1000(key, pr, zhangyuSlice?.[key]);
   const hasThrough =
     typeof pr.basicThrough === "number" || typeof pr.strengthenThrough === "number";
   if (hasThrough) {
@@ -159,6 +218,7 @@ function normalizeMathRow(key, row, chapters) {
       basicThrough: clampThroughValue(pr.basicThrough ?? 0, max),
       strengthenThrough: clampThroughValue(pr.strengthenThrough ?? 0, max),
       ...b660,
+      ...b1000,
     };
   }
   if ("basicPct" in pr || "strengthenPct" in pr) {
@@ -167,12 +227,14 @@ function normalizeMathRow(key, row, chapters) {
       basicThrough: n ? Math.round(((Number(pr.basicPct) || 0) / 100) * n) : 0,
       strengthenThrough: n ? Math.round(((Number(pr.strengthenPct) || 0) / 100) * n) : 0,
       ...b660,
+      ...b1000,
     };
   }
   return {
     basicThrough: clampThroughValue(pr.basicThrough ?? 0, max),
     strengthenThrough: clampThroughValue(pr.strengthenThrough ?? 0, max),
     ...b660,
+    ...b1000,
   };
 }
 
@@ -190,7 +252,7 @@ function normalize408Row(key, row, chapters) {
   return { through: clampThroughValue(pr.through ?? 0, max) };
 }
 
-function mergeMathMap(base, patch, catalogSlice) {
+function mergeMathMap(base, patch, catalogSlice, zhangyuSlice) {
   const out = {};
   for (const key of Object.keys(base)) {
     const ch = catalogSlice?.[key];
@@ -198,7 +260,7 @@ function mergeMathMap(base, patch, catalogSlice) {
       patch && typeof patch[key] === "object" && patch[key] != null
         ? { ...base[key], ...patch[key] }
         : base[key];
-    out[key] = normalizeMathRow(key, rowPatch, ch);
+    out[key] = normalizeMathRow(key, rowPatch, ch, zhangyuSlice);
   }
   return out;
 }
@@ -220,16 +282,21 @@ function mergeCs408Map(base, patch, catalogSlice) {
  * 合并进度 JSON；可选传入已解析的科目目录用于章节 clamp。
  * @param {typeof DEFAULT_STUDY_PROGRESS} base
  * @param {object} patch
- * @param {{ math?: object, cs408?: object } | undefined} catalog
+ * @param {{ math?: object, cs408?: object, zhangyu1000?: import('./studyCatalog.js').ReturnType<typeof import('./studyCatalog.js').parseZhangYu1000Catalog> } | undefined} catalog
  */
 export function mergeStudyProgressData(base, patch, catalog) {
   if (patch == null || typeof patch !== "object") return base;
   const mathCat = catalog?.math;
   const csCat = catalog?.cs408;
+  const zy = catalog?.zhangyu1000;
+  const zySubjects = zy
+    ? { 高数: zy.高数, 线代: zy.线代, 概率论: zy.概率论 }
+    : undefined;
   return {
-    math1: mergeMathMap(base.math1, patch.math1, mathCat),
-    math2: mergeMathMap(base.math2, patch.math2, mathCat),
+    math1: mergeMathMap(base.math1, patch.math1, mathCat, zySubjects),
+    math2: mergeMathMap(base.math2, patch.math2, mathCat, zySubjects),
     cs408: mergeCs408Map(base.cs408, patch.cs408, csCat),
+    zhangyu1000: normalizeZhangYuComprehensive(patch.zhangyu1000, zy?.综合),
     english: {
       mustWords: {
         round1Unit: clampUnit(
@@ -305,7 +372,7 @@ export function buildStudyProgressMarkdown(data) {
   const json = JSON.stringify(data, null, 2);
   return `# 学习进度
 
-本文件由 Study Markdown Reader 维护。下方以 \`${STUDY_PROGRESS_FENCE}\` 标记的 JSON 代码块与顶栏「学习进度」看板一致；进度字段与 \`科目目录/Math.mdc\`、\`科目目录/408.mdc\` 中章节对应（basicThrough / strengthenThrough / through 表示已过章节数）。**《660》**：每科可选 **book660Through**（已做题数）、**book660Total**（本分册总题数，高数默认 360；线代/概率填 0 则看板不显示该科 660 条）、**book660Caption**（看板说明，可选）。可直接改 JSON 后 **Ctrl+S** 保存，再点「刷新 UI」或重新打开看板即可同步。
+本文件由 Study Markdown Reader 维护。下方以 \`${STUDY_PROGRESS_FENCE}\` 标记的 JSON 代码块与顶栏「学习进度」看板一致；进度字段与 \`科目目录/Math.mdc\`、\`科目目录/408.mdc\` 中章节对应（basicThrough / strengthenThrough / through 表示已过章节数）。**《660》**：每科可选 **book660Through**、**book660Total**、**book660Caption**。**《张宇1000题》**：**book1000BasicThrough** / **book1000StrengthenThrough**（与 Math.mdc「张宇1000」分篇章节对齐）、**book1000Caption**；综合篇见根级 **zhangyu1000.comprehensiveThrough**（测试卷 0–4）。可直接改 JSON 后 **Ctrl+S** 保存，再点「刷新 UI」或重新打开看板即可同步。
 
 \`\`\`${STUDY_PROGRESS_FENCE}
 ${json}

@@ -1,17 +1,38 @@
 import { summarizePlanBoardProgress } from "./planBoard.js";
 
-export function PlanBoardDashboard({ data, embedded = false }) {
+/**
+ * @param {object} props
+ * @param {{ meta?: Record<string, string>, sections?: Array<{ title: string, items: Array<{ label: string, done: boolean | null }> }> }} props.data
+ * @param {boolean} [props.embedded]
+ * @param {string} [props.title]
+ * @param {boolean} [props.interactive]
+ * @param {(sectionIndex: number, itemIndex: number, done: boolean) => void} [props.onToggleItem]
+ * @param {() => void} [props.onOpenInEditor]
+ * @param {boolean} [props.saving]
+ */
+export function PlanBoardDashboard({
+  data,
+  embedded = false,
+  title = "进度规划看板",
+  interactive = false,
+  onToggleItem,
+  onOpenInEditor,
+  saving = false,
+}) {
   const sections = data?.sections || [];
   if (!sections.length) return null;
 
   const stats = summarizePlanBoardProgress(data);
+  const canToggle = interactive && typeof onToggleItem === "function";
 
   return (
     <div className={`plan-board-dash ${embedded ? "plan-board-dash--embedded" : ""}`}>
       <div className="plan-board-dash-header">
         {!embedded ? (
-          <h3 className="plan-board-dash-title">进度规划看板</h3>
-        ) : null}
+          <h3 className="plan-board-dash-title">{title}</h3>
+        ) : (
+          <h3 className="plan-board-dash-title plan-board-dash-title--compact">{title}</h3>
+        )}
         <div className="plan-board-dash-meta">
           {data.meta?.weekRange ? (
             <span className="plan-board-dash-pill">本周：{data.meta.weekRange}</span>
@@ -19,16 +40,23 @@ export function PlanBoardDashboard({ data, embedded = false }) {
           {data.meta?.phaseName ? (
             <span className="plan-board-dash-pill">阶段：{data.meta.phaseName}</span>
           ) : null}
+          {data.meta?.phaseLabel ? (
+            <span className="plan-board-dash-pill">{data.meta.phaseLabel}</span>
+          ) : null}
+          {data.meta?.currentPhase ? (
+            <span className="plan-board-dash-pill">阶段码：{data.meta.currentPhase}</span>
+          ) : null}
           {stats.total > 0 ? (
             <span className="plan-board-dash-stat">
               勾选进度 <strong>{stats.done}</strong> / {stats.total}
               {stats.pct != null ? `（${stats.pct}%）` : ""}
             </span>
           ) : null}
+          {saving ? <span className="plan-board-dash-pill plan-board-dash-pill--muted">保存中…</span> : null}
         </div>
       </div>
 
-      {(data.meta?.phaseDoc || data.meta?.weekDoc) && (
+      {(data.meta?.phaseDoc || data.meta?.weekDoc || data.meta?.statusDoc) && (
         <p className="plan-board-dash-links">
           {data.meta.phaseDoc ? (
             <span>
@@ -39,6 +67,12 @@ export function PlanBoardDashboard({ data, embedded = false }) {
             <span>
               {" "}
               · <code>{data.meta.weekDoc}</code>
+            </span>
+          ) : null}
+          {data.meta.statusDoc ? (
+            <span>
+              {" "}
+              · <code>{data.meta.statusDoc}</code>
             </span>
           ) : null}
         </p>
@@ -74,6 +108,16 @@ export function PlanBoardDashboard({ data, embedded = false }) {
                   >
                     {it.done === null ? (
                       <span className="plan-board-dash-note">{it.label}</span>
+                    ) : canToggle ? (
+                      <label className="plan-board-dash-check-label">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(it.done)}
+                          disabled={saving}
+                          onChange={(e) => onToggleItem(si, ii, e.target.checked)}
+                        />
+                        <span>{it.label}</span>
+                      </label>
                     ) : (
                       <>
                         <span className="plan-board-dash-check" aria-hidden>
@@ -90,16 +134,18 @@ export function PlanBoardDashboard({ data, embedded = false }) {
         ))}
       </div>
 
-      {!embedded ? (
-        <p className="plan-board-dash-footer">
-          在左侧编辑本文件中的 <code>- [ ]</code> / <code>- [x]</code> 后保存，预览即可刷新；可选{" "}
-          <code>smr-plan-board</code> JSON 填写周区间与关联文档路径。
-        </p>
-      ) : (
+      <div className="plan-board-dash-footer-row">
+        {onOpenInEditor ? (
+          <button type="button" className="ghost-btn plan-board-dash-open-btn" onClick={onOpenInEditor}>
+            在 Markdown 浏览器中编辑全文
+          </button>
+        ) : null}
         <p className="plan-board-dash-footer plan-board-dash-footer--short">
-          编辑请打开 <code>周期记录/进度规划看板.md</code> 保存后在此刷新。
+          {canToggle
+            ? "直接点击勾选会写入对应 .md 文件（需已用桌面版打开 Study 文件夹）。"
+            : "请用桌面版打开 Study 文件夹后，在进度中心勾选。"}
         </p>
-      )}
+      </div>
     </div>
   );
 }

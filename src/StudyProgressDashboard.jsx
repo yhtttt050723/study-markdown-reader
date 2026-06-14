@@ -3,6 +3,8 @@ import {
 } from "./studyCatalog.js";
 import {
   BOOK660_DEFAULT_TOTAL_CALC,
+  BOOK1000_COMPREHENSIVE_TOTAL,
+  BOOK1000_DEFAULT_MAX,
   CS408_CHAPTER_DEFAULT_MAX,
   ENGLISH_BASIC_UNITS,
   ENGLISH_MUST_UNITS,
@@ -15,6 +17,7 @@ function MathSubjectTracks({
   title,
   subjectKey,
   chapters,
+  zhangyuPhases,
   phase,
   onChange,
 }) {
@@ -139,6 +142,143 @@ function MathSubjectTracks({
           </div>
         </div>
       ) : null}
+
+      {(() => {
+        const def = BOOK1000_DEFAULT_MAX[subjectKey] ?? { 基础: 0, 强化: 0 };
+        const basicMax =
+          zhangyuPhases?.基础?.length > 0
+            ? zhangyuPhases.基础.length
+            : def.基础;
+        const strengthenMax =
+          zhangyuPhases?.强化?.length > 0
+            ? zhangyuPhases.强化.length
+            : def.强化;
+        if (basicMax <= 0 && strengthenMax <= 0) return null;
+
+        const b1 = Math.min(Math.max(0, phase.book1000BasicThrough ?? 0), basicMax);
+        const b2 = Math.min(
+          Math.max(0, phase.book1000StrengthenThrough ?? 0),
+          strengthenMax
+        );
+        const captionZy = (through, max, list, label) => {
+          if (through <= 0) return `${label} · 未开始`;
+          if (through >= max) return `${label} · 已全部过完`;
+          const row = list?.[through - 1];
+          return row ? `${label} · 已过至：${row.title}` : `${label} · 已过 ${through}/${max} 章`;
+        };
+        const customCap =
+          typeof phase.book1000Caption === "string" && phase.book1000Caption.trim();
+
+        return (
+          <>
+            {basicMax > 0 ? (
+              <div className="progress-dash-track-block">
+                <div className="progress-dash-track-head">
+                  <span className="progress-dash-track-name">《张宇1000》基础篇</span>
+                  <span className="progress-dash-track-meta">
+                    {b1}/{basicMax} 章 · {chapterThroughToPct(b1, basicMax)}%
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={basicMax}
+                  value={b1}
+                  onChange={(e) =>
+                    onChange({
+                      ...phase,
+                      book1000BasicThrough: Number(e.target.value),
+                    })
+                  }
+                />
+                <p className="progress-dash-track-caption">
+                  {customCap || captionZy(b1, basicMax, zhangyuPhases?.基础, "基础篇")}
+                </p>
+                <div className="progress-dash-mini-bar" aria-hidden>
+                  <div
+                    className="progress-dash-mini-fill progress-dash-mini-fill--1000"
+                    style={{ width: `${chapterThroughToPct(b1, basicMax)}%` }}
+                  />
+                </div>
+              </div>
+            ) : null}
+            {strengthenMax > 0 ? (
+              <div className="progress-dash-track-block">
+                <div className="progress-dash-track-head">
+                  <span className="progress-dash-track-name">《张宇1000》强化篇</span>
+                  <span className="progress-dash-track-meta">
+                    {b2}/{strengthenMax} 章 · {chapterThroughToPct(b2, strengthenMax)}%
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={strengthenMax}
+                  value={b2}
+                  onChange={(e) =>
+                    onChange({
+                      ...phase,
+                      book1000StrengthenThrough: Number(e.target.value),
+                    })
+                  }
+                />
+                <p className="progress-dash-track-caption">
+                  {captionZy(b2, strengthenMax, zhangyuPhases?.强化, "强化篇")}
+                </p>
+                <div className="progress-dash-mini-bar" aria-hidden>
+                  <div
+                    className="progress-dash-mini-fill progress-dash-mini-fill--1000"
+                    style={{ width: `${chapterThroughToPct(b2, strengthenMax)}%` }}
+                  />
+                </div>
+              </div>
+            ) : null}
+          </>
+        );
+      })()}
+    </div>
+  );
+}
+
+function ZhangYuComprehensiveTrack({ phase, chapters, onChange }) {
+  const total =
+    chapters?.length > 0 ? chapters.length : BOOK1000_COMPREHENSIVE_TOTAL;
+  const th = Math.min(Math.max(0, phase.comprehensiveThrough ?? 0), total);
+  const caption =
+    th <= 0
+      ? "综合篇 · 未开始"
+      : th >= total
+        ? "综合篇 · 四套测试卷已全部完成"
+        : `综合篇 · 已过至：${chapters?.[th - 1]?.title ?? `第 ${th} 套`}`;
+
+  return (
+    <div className="progress-dash-module progress-dash-module--zhangyu-comp">
+      <div className="progress-dash-module-title">《张宇1000》综合篇</div>
+      <div className="progress-dash-track-head">
+        <span className="progress-dash-track-name">测试卷</span>
+        <span className="progress-dash-track-meta">
+          {th}/{total} · {chapterThroughToPct(th, total)}%
+        </span>
+      </div>
+      <input
+        type="range"
+        min={0}
+        max={total}
+        value={th}
+        onChange={(e) =>
+          onChange({
+            ...phase,
+            comprehensiveThrough: Number(e.target.value),
+          })
+        }
+      />
+      <p className="progress-dash-track-caption">{caption}</p>
+      <div className="progress-dash-mini-bar" aria-hidden>
+        <div
+          className="progress-dash-mini-fill progress-dash-mini-fill--1000"
+          style={{ width: `${chapterThroughToPct(th, total)}%` }}
+        />
+      </div>
     </div>
   );
 }
@@ -272,6 +412,7 @@ export function StudyProgressDashboard({
   onClose,
   sourceHint,
   mathCatalog,
+  zhangyu1000Catalog,
   catalog408,
   catalogHint,
 }) {
@@ -314,6 +455,12 @@ export function StudyProgressDashboard({
   };
 
   const math = mathCatalog || { 高数: [], 线代: [], 概率论: [] };
+  const zy = zhangyu1000Catalog || {
+    高数: { 基础: [], 强化: [] },
+    线代: { 基础: [], 强化: [] },
+    概率论: { 基础: [], 强化: [] },
+    综合: [],
+  };
   const cs = catalog408 || {
     机组: [],
     数据结构: [],
@@ -355,6 +502,7 @@ export function StudyProgressDashboard({
                 title="高数"
                 subjectKey="高数"
                 chapters={math.高数}
+                zhangyuPhases={zy.高数}
                 phase={data.math1.高数}
                 onChange={(p) => patchMath1("高数", p)}
               />
@@ -362,6 +510,7 @@ export function StudyProgressDashboard({
                 title="线代"
                 subjectKey="线代"
                 chapters={math.线代}
+                zhangyuPhases={zy.线代}
                 phase={data.math1.线代}
                 onChange={(p) => patchMath1("线代", p)}
               />
@@ -369,8 +518,19 @@ export function StudyProgressDashboard({
                 title="概率论"
                 subjectKey="概率论"
                 chapters={math.概率论}
+                zhangyuPhases={zy.概率论}
                 phase={data.math1.概率论}
                 onChange={(p) => patchMath1("概率论", p)}
+              />
+              <ZhangYuComprehensiveTrack
+                phase={data.zhangyu1000 ?? { comprehensiveThrough: 0 }}
+                chapters={zy.综合}
+                onChange={(p) =>
+                  onChange({
+                    ...data,
+                    zhangyu1000: { ...data.zhangyu1000, ...p },
+                  })
+                }
               />
             </div>
           </section>
@@ -382,6 +542,7 @@ export function StudyProgressDashboard({
                 title="高数"
                 subjectKey="高数"
                 chapters={math.高数}
+                zhangyuPhases={zy.高数}
                 phase={data.math2.高数}
                 onChange={(p) => patchMath2("高数", p)}
               />
@@ -389,6 +550,7 @@ export function StudyProgressDashboard({
                 title="线代"
                 subjectKey="线代"
                 chapters={math.线代}
+                zhangyuPhases={zy.线代}
                 phase={data.math2.线代}
                 onChange={(p) => patchMath2("线代", p)}
               />

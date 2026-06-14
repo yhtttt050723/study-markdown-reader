@@ -130,3 +130,23 @@ export async function kbSuggestTagsFromOllama({ title, body }) {
   }
   return r.json();
 }
+
+/** 本地 Ollama：根据光标上下文续写（不写库） */
+export async function kbCompleteFromOllama({ title, prefix, suffix }, options = {}) {
+  const r = await kbFetch("/api/llm/complete", {
+    method: "POST",
+    body: JSON.stringify({ title, prefix, suffix }),
+    signal: options.signal,
+  });
+  if (!r.ok) {
+    let msg = await r.text();
+    try {
+      const j = JSON.parse(msg);
+      if (j.error) msg = j.error;
+    } catch {
+      /* use raw */
+    }
+    throw new Error(msg);
+  }
+  return r.json();
+}

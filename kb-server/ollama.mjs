@@ -63,6 +63,54 @@ export function extractJsonObject(text) {
   return JSON.parse(s.slice(start, end + 1));
 }
 
+const SYSTEM_COMPLETE = `你是考研/专业课学习笔记写作助手。用户正在写 Markdown 笔记，光标位于「上文」与「下文」之间。
+请续写光标处之后最自然的下一段内容（1–4 句，或若干 Markdown 列表项；可含 $...$ 公式）。
+硬性要求：
+- 只输出续写正文，不要重复上文，不要 JSON，不要代码块包裹，不要「好的/以下是」等客套
+- 不要输出新的 ## 标题，除非上文末尾正在写标题行且明显未完成
+- 若上文已完整或无法判断，只输出空字符串`;
+
+/**
+ * @param {{ title?: string, prefix: string, suffix?: string, maxPrefix?: number }} param0
+ */
+export function buildUserCompleteMessage({ title, prefix, suffix, maxPrefix = 7000 }) {
+  const t = String(title || "").slice(0, 160);
+  const pre = String(prefix || "").slice(-maxPrefix);
+  const suf = String(suffix || "").slice(0, 400);
+  return `笔记标题：${t || "未命名"}
+
+---上文（光标前）---
+${pre}
+
+---下文（光标后，可能为空）---
+${suf}
+
+请直接输出续写内容：`;
+}
+
+/** @param {string} text */
+export function sanitizeCompletion(text) {
+  let s = String(text || "").trim();
+  const fence = s.match(/^```(?:markdown|md)?\s*\n?([\s\S]*?)```$/i);
+  if (fence) s = fence[1].trim();
+  if (s.startsWith("续写：") || s.startsWith("续写:")) s = s.slice(3).trim();
+  if (s.length > 720) s = s.slice(0, 720);
+  return s;
+}
+
+/**
+ * @param {{ title?: string, prefix: string, suffix?: string }} input
+ * @returns {Promise<{ text: string }>}
+ */
+export async function completeNoteFromContext(input) {
+  const content = await ollamaChat([
+    { role: "system", content: SYSTEM_COMPLETE },
+    { role: "user", content: buildUserCompleteMessage(input) },
+  ]);
+  const text = sanitizeCompletion(content);
+  return { text };
+}
+
 const SYSTEM_SUGGEST_TAGS = `你是本地学习笔记助手（通义 Qwen）。用户笔记用于考研/专业课复习。
 你必须只输出一个 JSON 对象，不要 Markdown 标题、不要解释文字、不要代码块标记。
 JSON 字段与含义（字符串不要换行）：

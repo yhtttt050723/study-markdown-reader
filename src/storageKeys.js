@@ -19,6 +19,8 @@ export const LS_APP_SECTION = "smr-app-section";
 export const LS_FOLDER_PATH = "smr-folder-path";
 /** 速记笔记（与文件夹无关） */
 export const LS_QUICK_NOTES = "smr-quick-notes";
+/** 学习笔记 Tab 补全（Ollama），默认开启 */
+export const LS_NOTES_TAB_COMPLETE = "smr-notes-tab-complete";
 
 export function readStoredNumber(key, fallback, min, max) {
   try {

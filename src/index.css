@@ -1,9 +1,20 @@
 body {
   margin: 0;
-  font-family: Inter, -apple-system, system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-family: "Plus Jakarta Sans", -apple-system, system-ui, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
   font-feature-settings: "lnum" 1;
-  background: #f6f5f4;
-  color: rgba(0, 0, 0, 0.95);
+  background: #f5f2eb;
+  color: #1c1917;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 #root {

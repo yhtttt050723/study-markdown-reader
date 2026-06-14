@@ -66,7 +66,7 @@ export function extractArabicChapterLines(block) {
 const MATH_SECTIONS = [
   { key: "高数", start: "高等数学目录：", end: "线性代数目录：" },
   { key: "线代", start: "线性代数目录：", end: "概率论目录：" },
-  { key: "概率论", start: "概率论目录：", end: "\0" },
+  { key: "概率论", start: "概率论目录：", end: "张宇1000题目录：" },
 ];
 
 /**
@@ -135,4 +135,56 @@ export function chapterThroughToPct(through, totalChapters) {
   const n = Math.max(0, Math.floor(totalChapters));
   if (n <= 0) return 0;
   return Math.min(100, Math.round((t / n) * 1000) / 10);
+}
+
+const ZHANGYU1000_SECTIONS = [
+  { subject: "高数", phase: "基础", start: "张宇1000-高数-基础篇：", end: "张宇1000-高数-强化篇：" },
+  { subject: "高数", phase: "强化", start: "张宇1000-高数-强化篇：", end: "张宇1000-线代-基础篇：" },
+  { subject: "线代", phase: "基础", start: "张宇1000-线代-基础篇：", end: "张宇1000-线代-强化篇：" },
+  { subject: "线代", phase: "强化", start: "张宇1000-线代-强化篇：", end: "张宇1000-概率论-基础篇：" },
+  { subject: "概率论", phase: "基础", start: "张宇1000-概率论-基础篇：", end: "张宇1000-概率论-强化篇：" },
+  { subject: "概率论", phase: "强化", start: "张宇1000-概率论-强化篇：", end: "张宇1000-综合篇：" },
+];
+
+/**
+ * @typedef {{ 基础: CatalogChapter[], 强化: CatalogChapter[] }} ZhangYuSubjectPhases
+ */
+
+/**
+ * 从 Math.mdc 解析《张宇1000题》分篇章节目录。
+ * @param {string} md
+ * @returns {{
+ *   高数: ZhangYuSubjectPhases,
+ *   线代: ZhangYuSubjectPhases,
+ *   概率论: ZhangYuSubjectPhases,
+ *   综合: CatalogChapter[],
+ * }}
+ */
+export function parseZhangYu1000Catalog(md) {
+  const text = md || "";
+  /** @type {Record<string, ZhangYuSubjectPhases>} */
+  const subjects = {
+    高数: { 基础: [], 强化: [] },
+    线代: { 基础: [], 强化: [] },
+    概率论: { 基础: [], 强化: [] },
+  };
+  for (const { subject, phase, start, end } of ZHANGYU1000_SECTIONS) {
+    const i0 = text.indexOf(start);
+    if (i0 === -1) continue;
+    const startPos = i0 + start.length;
+    let endPos = text.length;
+    const i1 = text.indexOf(end, startPos);
+    if (i1 !== -1) endPos = i1;
+    const block = text.slice(startPos, endPos);
+    if (subjects[subject]) {
+      subjects[subject][phase] = extractChineseChapterLines(block);
+    }
+  }
+  let comprehensive = [];
+  const compStart = "张宇1000-综合篇：";
+  const i0 = text.indexOf(compStart);
+  if (i0 !== -1) {
+    comprehensive = extractChineseChapterLines(text.slice(i0 + compStart.length));
+  }
+  return { ...subjects, 综合: comprehensive };
 }

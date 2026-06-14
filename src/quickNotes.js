@@ -125,4 +125,9 @@ export function writeQuickNotesState(state) {
     LS_QUICK_NOTES,
     JSON.stringify({ notes, activeId: activeIdFinal }),
   );
+  try {
+    window.dispatchEvent(new CustomEvent("smr-quick-notes-changed"));
+  } catch {
+    /* non-browser */
+  }
 }
