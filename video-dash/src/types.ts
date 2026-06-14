@@ -1,3 +1,5 @@
+import type { ContentType, Subject } from './lib/seriesTaxonomy'
+
 export type SeriesPart = {
   page: number
   part: string
@@ -10,6 +12,8 @@ export type SeriesRecord = {
   title: string
   parts: SeriesPart[]
   fetchedAt: string
+  contentType: ContentType
+  subject: Subject
 }
 
 export type BiliPagelistItem = {

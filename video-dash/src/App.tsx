@@ -12,7 +12,7 @@ export default function App() {
             视频学习看板
           </h1>
           <p className="text-sm text-slate-600 dark:text-slate-400">
-            本地独立应用 · Vite + React + TS + Tailwind + TanStack Query / Table + Zustand
+            本地独立应用 · 按<strong className="font-medium text-slate-700 dark:text-slate-300">科目</strong>与<strong className="font-medium text-slate-700 dark:text-slate-300">类型（教学 / 题目讲解）</strong>分类管理 B 站分 P 进度
           </p>
         </div>
       </header>

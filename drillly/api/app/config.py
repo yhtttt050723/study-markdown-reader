@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     tongyi_model: str = "qwen-plus"
     tongyi_vision_model: str = "qwen-vl-max"
     deepseek_model: str = "deepseek-chat"
+    local_base_url: str = "http://127.0.0.1:11434/v1"
+    local_model: str = ""
+    local_api_key: str = "ollama"
     pdf_vision_text_threshold: int = 150
 
     pdf_max_mb: int = 80

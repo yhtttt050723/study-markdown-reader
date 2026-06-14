@@ -9,7 +9,7 @@ from pypdf import PdfReader
 
 from app.config import settings
 from app.services.pdf_metadata import enrich_questions
-from app.services.settings_store import get_effective_keys
+from app.services.settings_store import get_effective_keys, get_effective_local_llm
 from app.tools.pdf_render import render_chunk_images_b64
 
 _TYPE_ALIASES = {
@@ -51,7 +51,8 @@ def _normalize_questions(questions: list[dict[str, Any]]) -> list[dict[str, Any]
             q["options"] = []
             q.setdefault("answer", [])
         if q_type == "coding":
-            q.setdefault("language", q.get("language") or "python")
+            raw = str(q.get("language") or "").lower()
+            q.setdefault("language", raw if raw in ("c", "cpp") else "cpp")
         out.append(q)
     return out
 
@@ -166,7 +167,290 @@ def list_providers() -> list[dict]:
                 "available": True,
             }
         )
+    local = get_effective_local_llm()
+    if local.get("model"):
+        items.append(
+            {
+                "id": "local",
+                "label": "本地模型 (Ollama 等)",
+                "model": local["model"],
+                "available": True,
+            }
+        )
     return items
+
+
+async def complete_json_chat(
+    provider: str,
+    model: str | None,
+    prompt: str,
+    *,
+    timeout: float = 120.0,
+) -> Any:
+    """OpenAI 兼容接口单次对话，尽量解析为 JSON 对象。"""
+    keys = get_effective_keys()
+    prov = (provider or "").strip()
+    if prov == "mock":
+        raise ValueError("Mock 不能用于 AI 单词补充，请配置本地或云端模型")
+    if prov == "local":
+        cfg = get_effective_local_llm()
+        if not cfg.get("model"):
+            raise ValueError("请先在「设置」中填写本地模型名称（如 qwen2.5:7b）")
+        return await _post_chat_json(
+            base_url=cfg["base_url"],
+            api_key=cfg["api_key"],
+            model=(model or cfg["model"]).strip(),
+            prompt=prompt,
+            images=None,
+            timeout=timeout,
+            json_mode=True,
+            return_raw_on_fail=True,
+        )
+    if prov == "deepseek" and keys["deepseek"]:
+        return await _post_chat_json(
+            base_url="https://api.deepseek.com/v1",
+            api_key=keys["deepseek"],
+            model=(model or settings.deepseek_model).strip(),
+            prompt=prompt,
+            images=None,
+            timeout=timeout,
+            json_mode=True,
+            return_raw_on_fail=True,
+        )
+    if prov == "tongyi" and keys["tongyi"]:
+        return await _post_chat_json(
+            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            api_key=keys["tongyi"],
+            model=(model or settings.tongyi_model).strip(),
+            prompt=prompt,
+            images=None,
+            timeout=timeout,
+            json_mode=True,
+            return_raw_on_fail=True,
+        )
+    raise ValueError(f"模型不可用：{prov}（请在设置中配置 API Key 或本地模型）")
+
+
+def _english_vocab_prompt(
+    *,
+    page_start: int,
+    page_end: int,
+    source_filename: str,
+    text_block: str,
+    vision: bool,
+    unit_hint: str = "",
+    book_hint: str = "",
+    json_retry_hint: bool = False,
+) -> str:
+    book_line = book_hint.strip() or "（从 PDF 文件名或正文推断：基础词 / 必考词）"
+    unit_line = unit_hint.strip() or "（未指定，可从 PDF 页眉/Unit 标题推断）"
+    source_hint = "（看图识别词汇表，以下为页图）" if vision else text_block
+    return f"""你是考研英语「默写单词」词汇表解析助手。请根据以下 PDF 片段{"页面图片" if vision else "文本"}，提取本页所有英文单词及中文释义，供默写练习入库。
+
+【来源】
+- 文件名: {source_filename}
+- 页码: 第 {page_start}–{page_end} 页
+- 书系（基础词 / 必考词，优先使用）: {book_line}
+- Unit（优先使用）: {unit_line}
+
+【PDF 内容】
+{source_hint}
+
+【输出格式】仅输出一个 JSON 对象，禁止 markdown 代码块：
+{{
+  "unit": "单元编号，如 15",
+  "book": "基础词 或 必考词（与上方书系一致）",
+  "words": [
+    {{
+      "word": "英文单词（原形，不要短语句子）",
+      "meaning": "中文释义，可含词性如 v. 放弃；adj. 放弃的",
+      "phonetic": "音标，可选，如 /əˈbændən/"
+    }}
+  ]
+}}
+
+要求：
+- **本页出现的每一个词条都要提取**，含表格行、编号列表、两栏排版；不要整页跳过。
+- word 只写英文单词；meaning 写中文；看不清用 [?] 占位。
+- 忽略页眉页脚、纯页码、广告；不要输出重复 word。
+- 本批 words 建议 ≤80 条；过多时保证 JSON 完整闭合。
+{_JSON_ESCAPE_RULES}
+{"" if not json_retry_hint else _JSON_RETRY_APPEND}"""
+
+
+def _parse_words_payload(data: Any) -> tuple[list[dict[str, Any]], str]:
+    unit = ""
+    raw_words: list[Any] = []
+    if isinstance(data, dict):
+        unit = str(data.get("unit") or "").strip()
+        raw_words = data.get("words") or data.get("items") or []
+        if isinstance(raw_words, dict):
+            raw_words = list(raw_words.values())
+    elif isinstance(data, list):
+        raw_words = data
+
+    out: list[dict[str, Any]] = []
+    if not isinstance(raw_words, list):
+        return out, unit
+    for item in raw_words:
+        if isinstance(item, dict):
+            w = str(item.get("word") or item.get("title") or "").strip()
+            m = str(item.get("meaning") or item.get("definition") or "").strip()
+            p = str(item.get("phonetic") or "").strip()
+        elif isinstance(item, str) and "," in item:
+            parts = item.split(",", 1)
+            w, m = parts[0].strip(), parts[1].strip() if len(parts) > 1 else ""
+            p = ""
+        else:
+            continue
+        if w and re.search(r"[A-Za-z]", w):
+            row: dict[str, Any] = {"word": w, "meaning": m}
+            if p:
+                row["phonetic"] = p
+            out.append(row)
+    return out, unit
+
+
+async def parse_english_vocab_pdf_batch(
+    provider: str,
+    model: str | None,
+    chunk_path: str,
+    page_start: int,
+    page_end: int,
+    *,
+    source_filename: str = "",
+    unit_hint: str = "",
+    book_hint: str = "",
+    json_retry_hint: bool = False,
+) -> dict[str, Any]:
+    """复用 PDF 分批 + OpenAI 兼容接口，提示词改为提取默写单词。"""
+    filename = source_filename or Path(chunk_path).name
+    keys = get_effective_keys()
+    pdf_text = _extract_chunk_text(chunk_path, page_start, page_end)
+    text_len = len(pdf_text.strip())
+    need_vision = text_len < settings.pdf_vision_text_threshold
+    mode = "text"
+    raw: Any = None
+
+    def _prompt(vision: bool, text_block: str) -> str:
+        return _english_vocab_prompt(
+            page_start=page_start,
+            page_end=page_end,
+            source_filename=filename,
+            text_block=text_block,
+            vision=vision,
+            unit_hint=unit_hint,
+            book_hint=book_hint,
+            json_retry_hint=json_retry_hint,
+        )
+
+    if provider == "mock":
+        words = [
+            {"word": "abandon", "meaning": "v. 放弃", "phonetic": "/əˈbændən/"},
+            {"word": "inspect", "meaning": "v. 检查；视察"},
+        ]
+        return {
+            "words": words,
+            "unit": unit_hint or "1",
+            "extract_mode": "mock",
+            "text_chars": text_len,
+        }
+
+    if provider == "deepseek" and keys["deepseek"]:
+        if need_vision:
+            raise ValueError(
+                "该 PDF 几乎无文本层。请改用「通义千问」（支持视觉识词）或换带可复制文字的词汇 PDF。"
+            )
+        raw = await _post_chat_json(
+            base_url="https://api.deepseek.com/v1",
+            api_key=keys["deepseek"],
+            model=(model or settings.deepseek_model).strip(),
+            prompt=_prompt(False, pdf_text if pdf_text else "（无文本层）"),
+            images=None,
+            timeout=180.0,
+            json_mode=True,
+            return_raw_on_fail=True,
+        )
+    elif provider == "tongyi" and keys["tongyi"]:
+        base = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        if need_vision:
+            images = render_chunk_images_b64(chunk_path, max_pages=page_end - page_start + 1)
+            if not images:
+                raise ValueError("无法渲染 PDF 页图，请安装 pymupdf")
+            raw = await _post_chat_json(
+                base_url=base,
+                api_key=keys["tongyi"],
+                model=settings.tongyi_vision_model,
+                prompt=_prompt(True, ""),
+                images=images,
+                timeout=360.0,
+                json_mode=True,
+                return_raw_on_fail=True,
+            )
+            mode = "vision"
+        else:
+            raw = await _post_chat_json(
+                base_url=base,
+                api_key=keys["tongyi"],
+                model=(model or settings.tongyi_model).strip(),
+                prompt=_prompt(False, pdf_text if pdf_text else "（无文本层）"),
+                images=None,
+                timeout=180.0,
+                json_mode=True,
+                return_raw_on_fail=True,
+            )
+    elif provider == "local":
+        cfg = get_effective_local_llm()
+        if not cfg.get("model"):
+            raise ValueError("请先在设置中配置本地模型")
+        if need_vision:
+            raise ValueError("本地模型暂不支持扫描版 PDF，请用通义视觉或带文本层的 PDF")
+        raw = await _post_chat_json(
+            base_url=cfg["base_url"],
+            api_key=cfg["api_key"],
+            model=(model or cfg["model"]).strip(),
+            prompt=_prompt(False, pdf_text if pdf_text else "（无文本层）"),
+            images=None,
+            timeout=180.0,
+            json_mode=True,
+            return_raw_on_fail=True,
+        )
+    else:
+        raise ValueError(
+            f"提供商不可用或未配置 Key: {provider}（默写 PDF 推荐 DeepSeek，请在设置页填写 Key）"
+        )
+
+    if isinstance(raw, dict) and raw.get("raw_text"):
+        from app.services.word_dictation_import import parse_paste_lines
+
+        words = parse_paste_lines(str(raw["raw_text"]))
+        return {
+            "words": words,
+            "unit": unit_hint,
+            "extract_mode": "fallback_text",
+            "text_chars": text_len,
+        }
+
+    words, unit = _parse_words_payload(raw)
+    book = ""
+    if isinstance(raw, dict):
+        book = str(raw.get("book") or "").strip()
+    if unit_hint.strip():
+        unit = unit_hint.strip()
+    if book_hint.strip():
+        book = book_hint.strip()
+    for w in words:
+        if book and not w.get("book"):
+            w["book"] = book
+        if unit and not w.get("unit"):
+            w["unit"] = unit
+    return {
+        "words": words,
+        "unit": unit,
+        "book": book,
+        "extract_mode": mode,
+        "text_chars": text_len,
+    }
 
 
 def _extract_chunk_text(chunk_path: str, page_start: int, page_end: int) -> str:
@@ -498,6 +782,7 @@ async def _post_chat_json(
     images: list[str] | None,
     timeout: float,
     json_mode: bool = False,
+    return_raw_on_fail: bool = False,
 ) -> Any:
     if images:
         # 通义 VL：先图后文；须把 content 放进 messages（此前误发纯文本导致 400）
@@ -541,11 +826,16 @@ async def _post_chat_json(
         if r.status_code >= 400:
             detail = (r.text or "")[:800]
             raise ValueError(
-                f"通义 API {r.status_code}（模型 {model}）：{detail or r.reason_phrase}"
+                f"模型 API {r.status_code}（{model}）：{detail or r.reason_phrase}"
             )
         r.raise_for_status()
         text = r.json()["choices"][0]["message"]["content"]
-    return _loads_json_loose(text)
+    try:
+        return _loads_json_loose(text)
+    except json.JSONDecodeError:
+        if return_raw_on_fail:
+            return {"raw_text": (text or "").strip()}
+        raise
 
 
 def _fix_json_invalid_escapes(text: str) -> str:

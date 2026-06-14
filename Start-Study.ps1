@@ -1,6 +1,6 @@
 # Study launcher (ASCII filename — use Start-Study.bat to run)
 param(
-    [switch]$OpenBrowser = $true,
+    [switch]$NoOpenBrowser,
     [switch]$ReaderOnly,
     [switch]$NoReader,
     [switch]$NoVideoDash,
@@ -215,7 +215,7 @@ Write-Host 'Drillly API http://127.0.0.1:$Port/docs'
     Write-Host ''
     Write-Log 'Launch finished OK'
 
-    if ($OpenBrowser -and $urls.Count -gt 0) {
+    if (-not $NoOpenBrowser -and $urls.Count -gt 0) {
         Write-Host 'Opening browser in 8s ...' -ForegroundColor Cyan
         Start-Sleep -Seconds 8
         foreach ($u in $urls) {

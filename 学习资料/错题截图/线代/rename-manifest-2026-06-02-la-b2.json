@@ -1,0 +1,10 @@
+{
+  "date": "2026-06-02",
+  "subject": "线代",
+  "book": "1000基础Ch2",
+  "renames": [
+    { "to": "zy1000_la_b2_08.png", "question": "T8" },
+    { "to": "zy1000_la_b2_17.png", "question": "T17" },
+    { "to": "zy1000_la_b2_18.png", "question": "T18" }
+  ]
+}

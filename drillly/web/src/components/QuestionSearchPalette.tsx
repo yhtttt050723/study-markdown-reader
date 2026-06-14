@@ -41,7 +41,7 @@ export function QuestionSearchPalette({ open, onClose, filterParams, onSelect }:
       api
         .listPracticeQuestions(p)
         .then((rows) => {
-          setResults(rows)
+          setResults(Array.isArray(rows) ? rows : rows.items)
           setActiveIdx(0)
         })
         .catch(() => setResults([]))

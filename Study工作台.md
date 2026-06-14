@@ -6,7 +6,7 @@
 
 | 应用 | 目录 | 端口 | 职责 |
 |------|------|------|------|
-| **Study Markdown Reader** | `md-reader-app/` | **5210** | 主入口：读 `学习资料/`、进度看板、错题随机刷、视频进度看板、日报等 |
+| **Study Markdown Reader** | `md-reader-app/` | **5210** | 主入口：读 `学习资料/`、**进度中心**（学习进度 / **个人状态** / **进度规划** 可勾选写回 md）、错题刷题等 |
 | **video-dash** | `video-dash/` | **5211** | B 站合集分 P 勾选；写回 `学习资料/学习视频进度/*.md` |
 | **Drillly 做题本** | `drillly/api` + `drillly/web` | Web **5212** · API **5213** | PDF→LLM 出题、练习、代码运行、导出 MD |
 | **kb-server**（可选） | `md-reader-app/kb-server/` | **5214** | 笔记向量知识库（需 `-WithKb`） |
@@ -26,7 +26,7 @@ cd D:\Study
 
 | 参数 | 说明 |
 |------|------|
-| `-OpenBrowser:$false` | 不自动开浏览器 |
+| `-NoOpenBrowser` | 不自动开浏览器 |
 | `-ReaderOnly` | 只开 Markdown Reader |
 | `-NoVideoDash` | 不启 video-dash |
 | `-NoDrillly` | 不启 Drillly |
@@ -43,7 +43,7 @@ cd D:\Study
 ├── 学习视频进度/     ← video-dash 写 - [x] 分 P
 ├── 408/ 数学/ 英语/  ← Reader 扫描错题、二刷计划
 ├── 做题/             ← Drillly 导出题目 MD（规划路径）
-周期记录/             ← 日报、学习进度 smr-progress
+周期记录/             ← 日报、学习进度、个人状态看板、进度规划看板
 ```
 
 - **video-dash → Reader**：勾选同步到 `BV*.md`，Reader「视频进度」看板读取同一文件。

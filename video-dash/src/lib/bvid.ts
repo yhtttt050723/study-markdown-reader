@@ -9,3 +9,13 @@ export function extractBvid(input: string): string | null {
   const raw = m[0]
   return 'BV' + raw.slice(2)
 }
+
+/** 合集首页 */
+export function bilibiliSeriesUrl(bvid: string) {
+  return `https://www.bilibili.com/video/${bvid}`
+}
+
+/** 指定分 P */
+export function bilibiliPartUrl(bvid: string, page: number) {
+  return `${bilibiliSeriesUrl(bvid)}?p=${page}`
+}

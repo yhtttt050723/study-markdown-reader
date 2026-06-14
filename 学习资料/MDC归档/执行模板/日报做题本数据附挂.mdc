@@ -1,0 +1,104 @@
+# 日报 · Drillly 做题本时段数据附挂（固定流程）
+
+你是我的 **Study 学习日报** 助手。在 **`周期记录/YYYY-MM-DD.md`** 中写入或修订 **含「做题本 / Drillly / 刷题 / 默写」** 的学习段时，**必须**拉取该时段的 **SQLite 提交记录** 并附挂到对应段落。
+
+## 一、何时触发
+
+- 用户说：**「记录日报」**、**「写入段 #N」**、**「收工」**，且段内提到 **做题本 / Drillly / 操作系统做题本 / 默写 / 背词**。
+- 用户 @ 本文件，或说：**「按做题本数据模板附挂」**、**「段里加 Drillly 数据」**。
+- 与 **`执行模板/日报学习总时长统计.mdc`** 可同时执行（先写段内容，再附挂做题本，最后日末合计）。
+
+**获取本机时间**：先运行 `Get-Date -Format "yyyy-MM-dd HH:mm:ss K"`（不得以文件名或会话静态日期代替）。
+
+## 二、铁律（每次必做）
+
+1. **确定时段**：从日报 **`## 当日执行摘要`** 或 **`## 段 #N`** 读取 **`HH:MM—HH:MM`**（可跨日，如 `22:10—01:07`）。
+   - 跨日：起始日用段标题日期或摘要中 **较早日期**；结束日用 **较晚日期**（或次日）。
+2. **查询 Drillly 时段统计**（二选一，**优先 CLI**，API 未启动也能用）：
+
+```powershell
+cd D:\Study\drillly\api
+python scripts/query_session_stats.py --slot "22:10—01:07" --date 2026-06-09 --end-date 2026-06-10 --slot-label "段#1" --format both
+```
+
+或指定绝对时间：
+
+```powershell
+python scripts/query_session_stats.py --start "2026-06-09T22:10" --end "2026-06-10T01:07" --slot-label "段#1" --format both
+```
+
+仅某 PDF 时加：`--source-pdf "操作系统做题本.pdf"`
+
+3. **写入日报两处**（不可只口头回复）：
+   - **`## 段 #N`** 步骤表下方：粘贴 CLI 输出的 **Markdown 引用块**（`> **Drillly 做题本** …`）。
+   - 同段末尾增加 **`smr-drillly-slot`** JSON 代码块（见第三节）。
+4. **摘要行补强**：若段 bullet 只写「刷完 Ch1」等定性描述，在括号内补 **题数/次数**（来自统计），例如：  
+   `操作系统做题本 Ch1 全部习题（**42 题 · 58 次 · 对/错 51/7**）`。
+5. **修订记录** 追加 **vN**：**段 #N 附挂 Drillly 时段数据**。
+
+**不要**编造题数；时段内无提交则写「该时段无 Drillly 提交记录」。
+
+## 三、`smr-drillly-slot` 结构（Reader / 看板可扩展）
+
+每个学习段一个块，贴在对应 **`## 段 #N`** 末尾：
+
+```smr-drillly-slot
+{
+  "slotKey": "22:10—01:07",
+  "slotLabel": "段#1",
+  "start": "2026-06-09 22:10",
+  "end": "2026-06-10 01:07",
+  "practice": {
+    "questions": 42,
+    "submissions": 58,
+    "correct": 51,
+    "wrong": 7,
+    "by_source": [
+      { "source_pdf": "操作系统做题本.pdf", "questions": 42, "submissions": 58, "correct": 51, "wrong": 7 }
+    ]
+  },
+  "words": {
+    "words": 0,
+    "submissions": 0,
+    "correct": 0,
+    "wrong": 0,
+    "study_minutes": 0,
+    "by_unit": []
+  }
+}
+```
+
+字段与 API **`GET /api/practice/session-stats/`** 或 CLI JSON 输出一致；`practice` / `words` 无数据时填 0。
+
+## 四、HTTP API（可选）
+
+API 已启动时：
+
+```http
+GET /api/practice/session-stats/?slot=22:10—01:07&date=2026-06-09&end_date=2026-06-10&format=md
+GET /api/practice/session-stats/?start=2026-06-09T22:10&end=2026-06-10T01:07
+```
+
+## 五、与日报其他模板的关系
+
+| 模板 | 关系 |
+|:---|:---|
+| **日报学习总时长统计** | 本模板只补 **做题本量化**；时长仍以摘要 **`（约 X h Y min）`** 为准 |
+| **英语默写错词录入** | 默写错词落盘仍走英语模板；本模板只附挂 **Drillly 提交统计** |
+| **每日日报生成提示词** | 完成度表「总题数/错题数」优先用本模板查询结果 |
+
+## 六、触发语句（复制即用）
+
+| 场景 | 语句 |
+|:---|:---|
+| 单段附挂 | `按做题本数据模板，给今天段#1 附挂 Drillly 时段数据` |
+| 全日各段 | `按做题本数据模板，给今天日报所有含 Drillly 的段附挂数据` |
+| 指定 PDF | `按做题本数据模板附挂段#2，来源 操作系统做题本.pdf` |
+
+## 七、质量检查清单
+
+- [ ] 本机时间已获取，时段与日报 **HH:MM—HH:MM** 一致（跨日已写 end-date）
+- [ ] 已运行 **`query_session_stats.py`** 或 session-stats API
+- [ ] 段内已有 Markdown 引用 + **`smr-drillly-slot`**
+- [ ] 摘要/步骤表题数与 JSON 一致，未捏造
+- [ ] 修订记录已追加

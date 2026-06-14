@@ -1,0 +1,15 @@
+将「基础词」「必考词」各 Unit 的英文词汇 PDF 放在本文件夹（不要放在「已处理」子目录）。
+
+在 Drillly 打开「导入题目数据」→「默写单词」→「英文词汇 PDF 收件箱」→ 配置 DeepSeek Key →「一键处理全部」。
+
+【文件命名】建议文件名包含词书 + Unit，便于自动归类，例如：
+  基础词 Unit15.pdf
+  必考词 Unit3.pdf
+  基础词U20.pdf
+
+【去重】同一英文单词全局只保留一条（后导入的 Unit 若词已存在会跳过）。
+【PDF 去重】同一 PDF 文件内容未变时不会重复调用 AI；需重导请点「重置记录」再「强制重导」。
+
+模型推荐 DeepSeek；扫描版 PDF 请在导入页改选「通义千问」。
+
+可选：在 drillly\api\data\settings.json 设置 "english_vocab_inbox_dir" 自定义监听路径。

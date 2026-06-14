@@ -6,6 +6,7 @@ import {
 } from '@tanstack/react-table'
 import { useMemo } from 'react'
 import type { SeriesPart } from '../types'
+import { bilibiliPartUrl } from '../lib/bvid'
 import { useSeriesStore } from '../stores/seriesStore'
 
 function formatDuration(sec: number) {
@@ -50,9 +51,24 @@ export function PartsTable({ bvid, parts }: { bvid: string; parts: SeriesPart[] 
       }),
       helper.accessor('part', {
         header: '标题',
-        cell: (c) => (
-          <span className="line-clamp-2 text-left">{c.getValue()}</span>
-        ),
+        cell: (c) => {
+          const page = c.row.original.page
+          const url = bilibiliPartUrl(bvid, page)
+          return (
+            <div className="flex min-w-0 items-start gap-2">
+              <span className="line-clamp-2 min-w-0 flex-1 text-left">{c.getValue()}</span>
+              <a
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="shrink-0 rounded px-1.5 py-0.5 text-xs font-medium text-sky-600 underline-offset-2 hover:bg-sky-50 hover:underline dark:text-sky-400 dark:hover:bg-sky-950/40"
+                title={url}
+              >
+                打开
+              </a>
+            </div>
+          )
+        },
       }),
       helper.accessor('duration', {
         header: '时长',

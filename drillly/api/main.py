@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import settings as app_settings
 from app.database import init_db
-from app.routers import import_pdf, practice, questions, runner, sync
+from app.routers import import_pdf, practice, questions, runner, sync, word_dictation, wrong_questions
 from app.routers import settings as settings_router
 from app.services.settings_store import ensure_study_dirs, init_settings_from_env
 
@@ -35,6 +35,8 @@ app.include_router(import_pdf.router)
 app.include_router(runner.router)
 app.include_router(settings_router.router)
 app.include_router(sync.router)
+app.include_router(wrong_questions.router)
+app.include_router(word_dictation.router)
 
 app.mount(
     "/api/media",

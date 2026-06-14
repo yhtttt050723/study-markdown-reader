@@ -94,6 +94,17 @@ class SubmissionOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class SubmitAnswerOut(BaseModel):
+    submission: SubmissionOut
+    practice: PracticeStateOut | None = None
+
+
+class PracticeProgressUpdateOut(BaseModel):
+    ok: bool = True
+    question_id: int
+    practice: PracticeStateOut
+
+
 class RunnerExecuteBody(BaseModel):
     language: str
     code: str

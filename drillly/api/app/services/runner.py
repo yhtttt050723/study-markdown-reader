@@ -1,20 +1,34 @@
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
+from functools import lru_cache
 from pathlib import Path
 
 from app.config import settings
 
 MAX_OUTPUT = 64 * 1024
 
+_COMPILER_CACHE: dict[str, str | None] = {}
+
+
+@lru_cache(maxsize=1)
+def _python_cmd() -> str:
+    return sys.executable or "python"
+
 
 def _find_compiler(name: str) -> str | None:
+    if name in _COMPILER_CACHE:
+        return _COMPILER_CACHE[name]
     if settings.mingw_bin:
         candidate = Path(settings.mingw_bin) / (name + ".exe")
         if candidate.exists():
-            return str(candidate)
-    return shutil.which(name)
+            _COMPILER_CACHE[name] = str(candidate)
+            return _COMPILER_CACHE[name]
+    found = shutil.which(name)
+    _COMPILER_CACHE[name] = found
+    return found
 
 
 def execute_code(language: str, code: str, stdin: str = "") -> dict:
@@ -26,7 +40,7 @@ def execute_code(language: str, code: str, stdin: str = "") -> dict:
         if lang == "python":
             src = work / "main.py"
             src.write_text(code, encoding="utf-8")
-            cmd = ["python", str(src)]
+            cmd = [_python_cmd(), str(src)]
         elif lang == "java":
             src = work / "Main.java"
             src.write_text(code, encoding="utf-8")
@@ -56,8 +70,11 @@ def execute_code(language: str, code: str, stdin: str = "") -> dict:
             exe = work / ("main.exe" if os.name == "nt" else "main")
             src = work / ("main.c" if lang == "c" else "main.cpp")
             src.write_text(code, encoding="utf-8")
+            compile_args = [gcc, str(src), "-o", str(exe)]
+            if lang == "cpp":
+                compile_args.insert(1, "-std=c++17")
             compile = subprocess.run(
-                [gcc, str(src), "-o", str(exe)],
+                compile_args,
                 capture_output=True,
                 text=True,
                 timeout=timeout,

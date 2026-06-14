@@ -1,15 +1,23 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, type Question } from '../api'
 import {
   answerToText,
+  codingTestCases,
+  defaultStarterCode,
   defaultQuestionContent,
+  normalizeCodingLanguage,
   questionImages,
   questionOptions,
   textToAnswer,
+  type CodingTestCase,
   type QuestionType,
 } from '../utils/questionContent'
 import { questionChapter } from '../utils/questionSource'
-import { clipboardImageFile, imageFilesFromClipboard } from '../utils/clipboardImages'
+import {
+  clipboardImageFile,
+  clipboardPasteIsImageOnly,
+  imageFilesFromClipboard,
+} from '../utils/clipboardImages'
 
 type Props = {
   open: boolean
@@ -30,8 +38,13 @@ export function QuestionEditor({ open, question, onClose, onSaved }: Props) {
   const [chapter, setChapter] = useState('')
   const [images, setImages] = useState<string[]>([])
   const [pendingFiles, setPendingFiles] = useState<File[]>([])
+  const [language, setLanguage] = useState('cpp')
+  const [starterCode, setStarterCode] = useState('')
+  const [testCases, setTestCases] = useState<CodingTestCase[]>([])
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  const editorRef = useRef<HTMLDivElement>(null)
+  const imagesFieldRef = useRef<HTMLFieldSetElement>(null)
 
   useEffect(() => {
     if (!open) return
@@ -47,6 +60,9 @@ export function QuestionEditor({ open, question, onClose, onSaved }: Props) {
       setAnswerText(answerToText(c))
       setChapter(questionChapter(question))
       setImages(questionImages(question))
+      setLanguage(normalizeCodingLanguage(c.language))
+      setStarterCode(String(c.starterCode || ''))
+      setTestCases(codingTestCases(c))
     } else {
       const d = defaultQuestionContent('subjective')
       setType('subjective')
@@ -57,6 +73,9 @@ export function QuestionEditor({ open, question, onClose, onSaved }: Props) {
       setAnswerText('A')
       setChapter('')
       setImages([])
+      setLanguage('cpp')
+      setStarterCode(defaultStarterCode('cpp'))
+      setTestCases([])
     }
   }, [open, question])
 
@@ -94,8 +113,13 @@ export function QuestionEditor({ open, question, onClose, onSaved }: Props) {
       content.options = options.filter((o) => o.key.trim())
       content.answer = textToAnswer(answerText, type)
     } else if (type === 'coding') {
-      content.language = prev.language || 'python'
-      content.starterCode = prev.starterCode || ''
+      content.language = language
+      content.starterCode = starterCode
+      content.testCases = testCases.map((tc) => ({
+        input: tc.input,
+        expectedOutput: tc.expectedOutput,
+        ...(tc.note?.trim() ? { note: tc.note.trim() } : {}),
+      }))
     } else {
       content.answer = []
       delete content.options
@@ -116,32 +140,62 @@ export function QuestionEditor({ open, question, onClose, onSaved }: Props) {
     setPendingFiles((prev) => [...prev, ...Array.from(files)])
   }
 
-  const addPastedImages = async (raw: File[]) => {
-    if (!raw.length) return
-    const files = raw.map((f, i) => clipboardImageFile(f, i))
-    if (question) {
-      setBusy(true)
-      setErr('')
-      try {
-        for (const file of files) {
-          const res = await api.uploadQuestionImage(question.id, file)
-          setImages(res.images)
+  const addPastedImages = useCallback(
+    async (raw: File[]) => {
+      if (!raw.length) return
+      const files = raw.map((f, i) => clipboardImageFile(f, i))
+      if (question) {
+        setBusy(true)
+        setErr('')
+        try {
+          for (const file of files) {
+            const res = await api.uploadQuestionImage(question.id, file)
+            setImages(res.images)
+          }
+        } catch (e) {
+          setErr(e instanceof Error ? e.message : '粘贴上传失败')
+        } finally {
+          setBusy(false)
         }
-      } catch (e) {
-        setErr(e instanceof Error ? e.message : '粘贴上传失败')
-      } finally {
-        setBusy(false)
+        return
       }
-      return
+      setPendingFiles((prev) => [...prev, ...files])
+    },
+    [question],
+  )
+
+  const handleImagesPaste = useCallback(
+    (e: ClipboardEvent) => {
+      const raw = imageFilesFromClipboard(e)
+      if (!raw.length) return
+
+      const t = e.target
+      const inTextField =
+        t instanceof HTMLInputElement ||
+        t instanceof HTMLTextAreaElement ||
+        (t instanceof HTMLElement && t.isContentEditable)
+
+      if (inTextField && !clipboardPasteIsImageOnly(e)) return
+
+      e.preventDefault()
+      void addPastedImages(raw)
+    },
+    [addPastedImages],
+  )
+
+  useEffect(() => {
+    if (!open) return
+    const onPaste = (e: ClipboardEvent) => {
+      const root = editorRef.current
+      if (!root || !(e.target instanceof Node) || !root.contains(e.target)) return
+      handleImagesPaste(e)
     }
-    setPendingFiles((prev) => [...prev, ...files])
-  }
+    window.addEventListener('paste', onPaste)
+    return () => window.removeEventListener('paste', onPaste)
+  }, [open, handleImagesPaste])
 
   const onImagesPaste = (e: React.ClipboardEvent) => {
-    const raw = imageFilesFromClipboard(e.nativeEvent)
-    if (!raw.length) return
-    e.preventDefault()
-    void addPastedImages(raw)
+    handleImagesPaste(e.nativeEvent)
   }
 
   const removePending = (idx: number) => {
@@ -202,7 +256,13 @@ export function QuestionEditor({ open, question, onClose, onSaved }: Props) {
 
   return (
     <div className="question-editor-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="question-editor" role="dialog" aria-modal="true" aria-label={isNew ? '新建题目' : '编辑题目'}>
+      <div
+        ref={editorRef}
+        className="question-editor"
+        role="dialog"
+        aria-modal="true"
+        aria-label={isNew ? '新建题目' : '编辑题目'}
+      >
         <header className="question-editor-head">
           <h2>{isNew ? '新建题目' : `编辑题目 #${question?.id}`}</h2>
           <button type="button" className="btn" onClick={onClose}>
@@ -294,19 +354,101 @@ export function QuestionEditor({ open, question, onClose, onSaved }: Props) {
             </label>
           )}
 
+          {type === 'coding' && (
+            <>
+              <label className="qe-field">
+                默认语言
+                <select value={language} onChange={(e) => setLanguage(e.target.value)}>
+                  <option value="c">C</option>
+                  <option value="cpp">C++</option>
+                </select>
+              </label>
+              <label className="qe-field">
+                初始代码模板（可选）
+                <textarea
+                  rows={4}
+                  value={starterCode}
+                  onChange={(e) => setStarterCode(e.target.value)}
+                  placeholder="学生打开编辑器时的默认代码"
+                  className="qe-code-area"
+                />
+              </label>
+              <fieldset className="qe-field">
+                <legend>测试数据（存档对照，不自动判题）</legend>
+                <p className="muted qe-hint">每组可填 stdin / 期望 stdout，练习时仅作参考。</p>
+                {testCases.map((tc, i) => (
+                  <div key={i} className="qe-testcase-block">
+                    <input
+                      className="qe-testcase-note"
+                      value={tc.note || ''}
+                      onChange={(e) => {
+                        const next = [...testCases]
+                        next[i] = { ...tc, note: e.target.value }
+                        setTestCases(next)
+                      }}
+                      placeholder={`用例 ${i + 1} 备注（可选）`}
+                    />
+                    <label className="qe-testcase-label">
+                      输入
+                      <textarea
+                        rows={2}
+                        value={tc.input}
+                        onChange={(e) => {
+                          const next = [...testCases]
+                          next[i] = { ...tc, input: e.target.value }
+                          setTestCases(next)
+                        }}
+                      />
+                    </label>
+                    <label className="qe-testcase-label">
+                      期望输出
+                      <textarea
+                        rows={2}
+                        value={tc.expectedOutput}
+                        onChange={(e) => {
+                          const next = [...testCases]
+                          next[i] = { ...tc, expectedOutput: e.target.value }
+                          setTestCases(next)
+                        }}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => setTestCases(testCases.filter((_, j) => j !== i))}
+                    >
+                      删除用例
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() =>
+                    setTestCases([...testCases, { input: '', expectedOutput: '', note: '' }])
+                  }
+                >
+                  + 测试用例
+                </button>
+              </fieldset>
+            </>
+          )}
+
           <label className="qe-field">
             解析（可选）
             <textarea rows={3} value={explanation} onChange={(e) => setExplanation(e.target.value)} />
           </label>
 
           <fieldset
+            ref={imagesFieldRef}
             className="qe-field qe-images-field"
             tabIndex={0}
             onPaste={onImagesPaste}
+            onClick={() => imagesFieldRef.current?.focus()}
           >
             <legend>题目附图</legend>
             <p className="muted qe-hint">
-              支持 png / jpg / webp / gif · 点击本区域后 <strong>Ctrl+V</strong> 粘贴截图
+              支持 png / jpg / webp / gif · 编辑弹窗内 <strong>Ctrl+V</strong> 粘贴截图（优先识别剪贴板图片）
             </p>
             <div className="qe-images">
               {images.map((url) => (

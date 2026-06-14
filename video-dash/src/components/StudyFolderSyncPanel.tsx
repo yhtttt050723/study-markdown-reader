@@ -6,6 +6,7 @@ import {
   readFileText,
   writeFileText,
 } from '../lib/markdownSync'
+import { syncVideoProgressBoard } from '../lib/videoProgressBoardSync'
 import {
   clearStudyVideoDirHandle,
   ensureDirWritable,
@@ -53,6 +54,7 @@ export function StudyFolderSyncPanel() {
       const granted = await ensureDirWritable(dir)
       if (!granted) throw new Error('没有写入权限')
       await syncSeriesList(dir, list)
+      await syncVideoProgressBoard(dir, list)
       setLastOkAt(new Date().toLocaleString())
     } catch (e) {
       setLastErr((e as Error).message || String(e))
@@ -131,7 +133,7 @@ export function StudyFolderSyncPanel() {
       <p className="mb-3 text-sm text-emerald-800/90 dark:text-emerald-200/80">
         选择本机 **`学习资料\学习视频进度`** 文件夹（与 Reader 打开的 Study 目录里路径一致）。勾选分 P 后会**自动**把 <code className="rounded bg-white/60 px-1 dark:bg-black/20">- [x]</code> 写回对应的{' '}
         <code className="rounded bg-white/60 px-1 dark:bg-black/20">BV*.md</code>
-        ，Reader 里「视频进度看板」重新打开或点刷新即可看到一致勾选。
+        ，Reader 里「视频进度看板」重新打开或点刷新即可看到一致勾选；<strong>新勾选的分 P</strong> 会自动累加到当日 <code>dailyLog</code>（本周观看分钟）。
       </p>
       <div className="flex flex-wrap items-center gap-2">
         {!dirHandle ? (

@@ -1,13 +1,16 @@
 ---
+content_type_label: 教学
+content_type: teaching
+subject: 数据结构
 bvid: BV1b7411N798
-series_title: "0.0 课程白嫖指南"
+series_title: "王道 · 数据结构"
 episode_count: 104
 watched_count: 0
 last_sync_api: "2026-05-19"
 watch_hint: "由 video-dash 生成"
 ---
 
-# 0.0 课程白嫖指南
+# 王道 · 数据结构
 
 - **合集**：https://www.bilibili.com/video/BV1b7411N798
 
@@ -88,32 +91,32 @@ watch_hint: "由 video-dash 生成"
 - [x] **P73**（890s）— [7.2.1_顺序查找](https://www.bilibili.com/video/BV1b7411N798?p=73)
 - [x] **P74**（1426s）— [7.2.2_折半查找](https://www.bilibili.com/video/BV1b7411N798?p=74)
 - [x] **P75**（1417s）— [7.2.3_分块查找](https://www.bilibili.com/video/BV1b7411N798?p=75)
-- [ ] **P76**（1123s）— [7.3.1 二叉排序树](https://www.bilibili.com/video/BV1b7411N798?p=76)
-- [ ] **P77**（1948s）— [7.3.2_1 平衡二叉树](https://www.bilibili.com/video/BV1b7411N798?p=77)
-- [ ] **P78**（1836s）— [7.3.2_2_平衡二叉树的删除](https://www.bilibili.com/video/BV1b7411N798?p=78)
-- [ ] **P79**（1542s）— [7.3.3_1_红黑树的定义和性质](https://www.bilibili.com/video/BV1b7411N798?p=79)
-- [ ] **P80**（2181s）— [7.3.3_2_红黑树的插入](https://www.bilibili.com/video/BV1b7411N798?p=80)
-- [ ] **P81**（286s）— [7.3.3_3_红黑树的删除](https://www.bilibili.com/video/BV1b7411N798?p=81)
-- [ ] **P82**（1729s）— [7.4.1_1_B树](https://www.bilibili.com/video/BV1b7411N798?p=82)
-- [ ] **P83**（1207s）— [7.4.1_2_B树的插入删除](https://www.bilibili.com/video/BV1b7411N798?p=83)
-- [ ] **P84**（1285s）— [7.4.2_B+树](https://www.bilibili.com/video/BV1b7411N798?p=84)
-- [ ] **P85**（579s）— [7.5.1 散列表的基本概念](https://www.bilibili.com/video/BV1b7411N798?p=85)
-- [ ] **P86**（913s）— [7.5.2 散列函数的构造](https://www.bilibili.com/video/BV1b7411N798?p=86)
-- [ ] **P87**（596s）— [7.5.3_1 处理冲突的方法_拉链法](https://www.bilibili.com/video/BV1b7411N798?p=87)
-- [ ] **P88**（1569s）— [7.5.3_2 处理冲突的方法_开放定址法](https://www.bilibili.com/video/BV1b7411N798?p=88)
-- [ ] **P89**（1850s）— [7.5.4 散列查找的性能分析](https://www.bilibili.com/video/BV1b7411N798?p=89)
-- [ ] **P90**（632s）— [8.1_排序的基本概念](https://www.bilibili.com/video/BV1b7411N798?p=90)
-- [ ] **P91**（1216s）— [8.2.1+8.2.2_插入排序](https://www.bilibili.com/video/BV1b7411N798?p=91)
-- [ ] **P92**（1296s）— [8.2.3_希尔排序](https://www.bilibili.com/video/BV1b7411N798?p=92)
-- [ ] **P93**（781s）— [8.3.1_冒泡排序](https://www.bilibili.com/video/BV1b7411N798?p=93)
-- [ ] **P94**（2229s）— [8.3.2_快速排序](https://www.bilibili.com/video/BV1b7411N798?p=94)
-- [ ] **P95**（299s）— [8.4.1_简单选择排序](https://www.bilibili.com/video/BV1b7411N798?p=95)
-- [ ] **P96**（1969s）— [8.4.2_1_堆排序](https://www.bilibili.com/video/BV1b7411N798?p=96)
-- [ ] **P97**（425s）— [8.4.2_2_堆的插入删除](https://www.bilibili.com/video/BV1b7411N798?p=97)
-- [ ] **P98**（1346s）— [8.5.1_归并排序](https://www.bilibili.com/video/BV1b7411N798?p=98)
-- [ ] **P99**（1536s）— [8.5.2_基数排序](https://www.bilibili.com/video/BV1b7411N798?p=99)
-- [ ] **P100**（2168s）— [8.5.3 计数排序](https://www.bilibili.com/video/BV1b7411N798?p=100)
-- [ ] **P101**（1822s）— [8.7.1+8.7.2_外部排序](https://www.bilibili.com/video/BV1b7411N798?p=101)
-- [ ] **P102**（1060s）— [8.7.3_败者树](https://www.bilibili.com/video/BV1b7411N798?p=102)
-- [ ] **P103**（633s）— [8.7.4_置换-选择排序](https://www.bilibili.com/video/BV1b7411N798?p=103)
-- [ ] **P104**（1158s）— [8.7.5_最佳归并树](https://www.bilibili.com/video/BV1b7411N798?p=104)
+- [x] **P76**（1123s）— [7.3.1 二叉排序树](https://www.bilibili.com/video/BV1b7411N798?p=76)
+- [x] **P77**（1948s）— [7.3.2_1 平衡二叉树](https://www.bilibili.com/video/BV1b7411N798?p=77)
+- [x] **P78**（1836s）— [7.3.2_2_平衡二叉树的删除](https://www.bilibili.com/video/BV1b7411N798?p=78)
+- [x] **P79**（1542s）— [7.3.3_1_红黑树的定义和性质](https://www.bilibili.com/video/BV1b7411N798?p=79)
+- [x] **P80**（2181s）— [7.3.3_2_红黑树的插入](https://www.bilibili.com/video/BV1b7411N798?p=80)
+- [x] **P81**（286s）— [7.3.3_3_红黑树的删除](https://www.bilibili.com/video/BV1b7411N798?p=81)
+- [x] **P82**（1729s）— [7.4.1_1_B树](https://www.bilibili.com/video/BV1b7411N798?p=82)
+- [x] **P83**（1207s）— [7.4.1_2_B树的插入删除](https://www.bilibili.com/video/BV1b7411N798?p=83)
+- [x] **P84**（1285s）— [7.4.2_B+树](https://www.bilibili.com/video/BV1b7411N798?p=84)
+- [x] **P85**（579s）— [7.5.1 散列表的基本概念](https://www.bilibili.com/video/BV1b7411N798?p=85)
+- [x] **P86**（913s）— [7.5.2 散列函数的构造](https://www.bilibili.com/video/BV1b7411N798?p=86)
+- [x] **P87**（596s）— [7.5.3_1 处理冲突的方法_拉链法](https://www.bilibili.com/video/BV1b7411N798?p=87)
+- [x] **P88**（1569s）— [7.5.3_2 处理冲突的方法_开放定址法](https://www.bilibili.com/video/BV1b7411N798?p=88)
+- [x] **P89**（1850s）— [7.5.4 散列查找的性能分析](https://www.bilibili.com/video/BV1b7411N798?p=89)
+- [x] **P90**（632s）— [8.1_排序的基本概念](https://www.bilibili.com/video/BV1b7411N798?p=90)
+- [x] **P91**（1216s）— [8.2.1+8.2.2_插入排序](https://www.bilibili.com/video/BV1b7411N798?p=91)
+- [x] **P92**（1296s）— [8.2.3_希尔排序](https://www.bilibili.com/video/BV1b7411N798?p=92)
+- [x] **P93**（781s）— [8.3.1_冒泡排序](https://www.bilibili.com/video/BV1b7411N798?p=93)
+- [x] **P94**（2229s）— [8.3.2_快速排序](https://www.bilibili.com/video/BV1b7411N798?p=94)
+- [x] **P95**（299s）— [8.4.1_简单选择排序](https://www.bilibili.com/video/BV1b7411N798?p=95)
+- [x] **P96**（1969s）— [8.4.2_1_堆排序](https://www.bilibili.com/video/BV1b7411N798?p=96)
+- [x] **P97**（425s）— [8.4.2_2_堆的插入删除](https://www.bilibili.com/video/BV1b7411N798?p=97)
+- [x] **P98**（1346s）— [8.5.1_归并排序](https://www.bilibili.com/video/BV1b7411N798?p=98)
+- [x] **P99**（1536s）— [8.5.2_基数排序](https://www.bilibili.com/video/BV1b7411N798?p=99)
+- [x] **P100**（2168s）— [8.5.3 计数排序](https://www.bilibili.com/video/BV1b7411N798?p=100)
+- [x] **P101**（1822s）— [8.7.1+8.7.2_外部排序](https://www.bilibili.com/video/BV1b7411N798?p=101)
+- [x] **P102**（1060s）— [8.7.3_败者树](https://www.bilibili.com/video/BV1b7411N798?p=102)
+- [x] **P103**（633s）— [8.7.4_置换-选择排序](https://www.bilibili.com/video/BV1b7411N798?p=103)
+- [x] **P104**（1158s）— [8.7.5_最佳归并树](https://www.bilibili.com/video/BV1b7411N798?p=104)

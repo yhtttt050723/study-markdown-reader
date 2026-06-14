@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session, joinedload
 
-from app.models import PracticeProgress, Question, Tag
+from app.models import PracticeProgress, Question, Submission, Tag
 from app.services.tag_hierarchy import is_group_name, question_matches_tag_filter
 
 
@@ -27,7 +27,7 @@ def question_search_blob(content: dict | None) -> str:
         for u in imgs:
             if isinstance(u, str) and u.strip():
                 parts.append(u)
-    for key in ("title", "stem", "explanation"):
+    for key in ("title", "stem", "explanation", "word", "meaning", "phonetic"):
         v = content.get(key)
         if isinstance(v, str) and v.strip():
             parts.append(v)
@@ -72,6 +72,32 @@ def _apply_tag_filters(q, tags: str):
     return q.filter(or_(*clauses))
 
 
+def _apply_self_mark_filter(db: Session, q, self_mark_status: str | None):
+    """按最近一次自评结果筛选（wrong_review 刷错题）。"""
+    if self_mark_status not in ("correct", "wrong", "unmarked"):
+        return q
+    from sqlalchemy.orm import aliased
+    from sqlalchemy import func
+
+    subq = (
+        db.query(
+            Submission.question_id,
+            func.max(Submission.id).label("max_id"),
+        )
+        .group_by(Submission.question_id)
+        .subquery()
+    )
+    latest_sub = aliased(Submission)
+    q = q.outerjoin(subq, Question.id == subq.c.question_id).outerjoin(
+        latest_sub,
+        latest_sub.id == subq.c.max_id,
+    )
+    if self_mark_status == "unmarked":
+        return q.filter(latest_sub.id.is_(None))
+    want_ok = self_mark_status == "correct"
+    return q.filter(latest_sub.is_correct.is_(want_ok))
+
+
 def _apply_practice_filter(q, practice_round: int | None, round_status: str | None):
     if practice_round not in (1, 2) or round_status not in ("pending", "done"):
         return q
@@ -101,7 +127,7 @@ def list_pdf_sources(db: Session) -> list[dict[str, Any]]:
     ]
 
 
-def load_questions(
+def _practice_questions_query(
     db: Session,
     *,
     tags: str | None = None,
@@ -111,10 +137,8 @@ def load_questions(
     search: str | None = None,
     practice_round: int | None = None,
     round_status: str | None = None,
-    order: str = "id",
-    limit: int = 500,
-    offset: int = 0,
-) -> list[Question]:
+    self_mark_status: str | None = None,
+):
     q = db.query(Question).options(
         joinedload(Question.tags),
         joinedload(Question.category),
@@ -138,13 +162,68 @@ def load_questions(
 
     q = _apply_tag_filters(q, tags)
     q = _apply_practice_filter(q, practice_round, round_status)
+    q = _apply_self_mark_filter(db, q, self_mark_status)
+    return q.distinct()
 
+
+def count_questions(
+    db: Session,
+    *,
+    tags: str | None = None,
+    category: str | None = None,
+    q_type: str | None = None,
+    source_pdf: str | None = None,
+    search: str | None = None,
+    practice_round: int | None = None,
+    round_status: str | None = None,
+    self_mark_status: str | None = None,
+) -> int:
+    q = _practice_questions_query(
+        db,
+        tags=tags,
+        category=category,
+        q_type=q_type,
+        source_pdf=source_pdf,
+        search=search,
+        practice_round=practice_round,
+        round_status=round_status,
+        self_mark_status=self_mark_status,
+    )
+    return int(q.with_entities(func.count(Question.id.distinct())).scalar() or 0)
+
+
+def load_questions(
+    db: Session,
+    *,
+    tags: str | None = None,
+    category: str | None = None,
+    q_type: str | None = None,
+    source_pdf: str | None = None,
+    search: str | None = None,
+    practice_round: int | None = None,
+    round_status: str | None = None,
+    self_mark_status: str | None = None,
+    order: str = "id",
+    limit: int = 50,
+    offset: int = 0,
+) -> list[Question]:
+    q = _practice_questions_query(
+        db,
+        tags=tags,
+        category=category,
+        q_type=q_type,
+        source_pdf=source_pdf,
+        search=search,
+        practice_round=practice_round,
+        round_status=round_status,
+        self_mark_status=self_mark_status,
+    )
     if order == "random":
         q = q.order_by(func.random())
     else:
         q = q.order_by(Question.id)
 
-    return q.distinct().offset(offset).limit(limit).all()
+    return q.offset(offset).limit(limit).all()
 
 
 def progress_map(db: Session, question_ids: list[int]) -> dict[int, dict[str, bool]]:

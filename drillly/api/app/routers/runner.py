@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import APIRouter
 
 from app.schemas.api_models import RunnerExecuteBody, RunnerExecuteOut
@@ -7,6 +9,8 @@ router = APIRouter(prefix="/api/runner", tags=["runner"])
 
 
 @router.post("/execute/", response_model=RunnerExecuteOut)
-def run_code(body: RunnerExecuteBody):
-    result = execute_code(body.language, body.code, body.stdin)
+async def run_code(body: RunnerExecuteBody):
+    result = await asyncio.to_thread(
+        execute_code, body.language, body.code, body.stdin
+    )
     return RunnerExecuteOut(**result)

@@ -1,0 +1,18 @@
+{
+  "date": "2026-06-02",
+  "subject": "概率论",
+  "renames": [
+    { "to": "zy1000_prob_b1_10.png", "book": "1000Ch1", "question": "T10" },
+    { "to": "zy1000_prob_b1_12.png", "book": "1000Ch1", "question": "T12" },
+    { "to": "zy1000_prob_b1_14.png", "book": "1000Ch1", "question": "T14" },
+    { "to": "660_521.png", "book": "660Ch2", "question": "T521" },
+    { "to": "660_524.png", "book": "660Ch2", "question": "T524" },
+    { "to": "660_526.png", "book": "660Ch2", "question": "T526" },
+    { "to": "660_527.png", "book": "660Ch2", "question": "T527" },
+    { "to": "660_528.png", "book": "660Ch2", "question": "T528" },
+    { "to": "660_591.png", "book": "660Ch2", "question": "T591" },
+    { "to": "660_592.png", "book": "660Ch2", "question": "T592" },
+    { "to": "660_594.png", "book": "660Ch2", "question": "T594" },
+    { "to": "660_599.png", "book": "660Ch2", "question": "T599" }
+  ]
+}

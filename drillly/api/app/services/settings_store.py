@@ -49,6 +49,16 @@ def get_effective_keys() -> dict[str, str]:
     }
 
 
+def get_effective_local_llm() -> dict[str, str]:
+    raw = _load_raw()
+    base = (raw.get("local_base_url") or settings.local_base_url or "").strip()
+    model = (raw.get("local_model") or settings.local_model or "").strip()
+    api_key = (raw.get("local_api_key") or settings.local_api_key or "ollama").strip()
+    if base and not base.rstrip("/").endswith("/v1"):
+        base = base.rstrip("/") + "/v1"
+    return {"base_url": base, "model": model, "api_key": api_key or "ollama"}
+
+
 def apply_keys_to_runtime() -> None:
     keys = get_effective_keys()
     if keys["tongyi"]:
@@ -83,18 +93,27 @@ def _update_env_file(updates: dict[str, str]) -> None:
 def get_public_settings() -> dict[str, Any]:
     raw = _load_raw()
     keys = get_effective_keys()
+    local = get_effective_local_llm()
     return {
         "tongyi_api_key_masked": _mask_key(keys["tongyi"]),
         "deepseek_api_key_masked": _mask_key(keys["deepseek"]),
         "tongyi_configured": bool(keys["tongyi"]),
         "deepseek_configured": bool(keys["deepseek"]),
+        "local_base_url": local["base_url"],
+        "local_model": local["model"],
+        "local_api_key_masked": _mask_key(local["api_key"]) if local["api_key"] != "ollama" else "",
+        "local_configured": bool(local["model"]),
         "llm_default_provider": raw.get("llm_default_provider") or settings.llm_default_provider,
         "pdf_inbox_dir": str(get_pdf_inbox_dir()),
+        "english_vocab_inbox_dir": str(get_english_vocab_inbox_dir()),
         "pdf_pages_per_batch": int(
             raw.get("pdf_pages_per_batch") or settings.pdf_default_pages_per_batch
         ),
         "study_export_wrongbook": str(get_wrongbook_export_dir()),
         "study_video_progress_file": str(get_video_progress_file()),
+        "study_word_time_board_file": str(
+            Path(settings.study_root) / "学习资料" / "学习数据看板" / "背词时长数据.md"
+        ),
     }
 
 
@@ -103,6 +122,9 @@ def update_settings(
     tongyi_api_key: str | None = None,
     deepseek_api_key: str | None = None,
     llm_default_provider: str | None = None,
+    local_base_url: str | None = None,
+    local_model: str | None = None,
+    local_api_key: str | None = None,
     pdf_pages_per_batch: int | None = None,
 ) -> dict[str, Any]:
     raw = _load_raw()
@@ -117,6 +139,12 @@ def update_settings(
     if llm_default_provider:
         raw["llm_default_provider"] = llm_default_provider
         env_updates["LLM_DEFAULT_PROVIDER"] = llm_default_provider
+    if local_base_url is not None and local_base_url.strip():
+        raw["local_base_url"] = local_base_url.strip()
+    if local_model is not None:
+        raw["local_model"] = local_model.strip()
+    if local_api_key is not None and local_api_key.strip() and local_api_key != MASK:
+        raw["local_api_key"] = local_api_key.strip()
     if pdf_pages_per_batch is not None:
         raw["pdf_pages_per_batch"] = pdf_pages_per_batch
 
@@ -149,6 +177,13 @@ def get_pdf_inbox_dir() -> Path:
     return Path(settings.study_root) / "学习资料" / "做题" / "PDF待导入"
 
 
+def get_english_vocab_inbox_dir() -> Path:
+    raw = _load_raw()
+    if raw.get("english_vocab_inbox_dir"):
+        return Path(raw["english_vocab_inbox_dir"])
+    return Path(settings.study_root) / "学习资料" / "做题" / "英文词汇PDF待导入"
+
+
 def get_wrongbook_export_dir() -> Path:
     d = Path(settings.study_root) / "学习资料" / "做题" / "同步错题"
     d.mkdir(parents=True, exist_ok=True)
@@ -161,4 +196,6 @@ def get_video_progress_file() -> Path:
 
 def ensure_study_dirs() -> None:
     get_pdf_inbox_dir().mkdir(parents=True, exist_ok=True)
+    get_english_vocab_inbox_dir().mkdir(parents=True, exist_ok=True)
     get_wrongbook_export_dir().mkdir(parents=True, exist_ok=True)
+    (Path(settings.study_root) / "学习资料" / "学习数据看板").mkdir(parents=True, exist_ok=True)

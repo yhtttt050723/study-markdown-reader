@@ -8,6 +8,12 @@ import {
   type InboxStreamEvent,
 } from '../api/inboxStream'
 import { importZh as t } from '../i18n/importZh'
+import {
+  WordDataImportSection,
+  WrongDataImportSection,
+} from '../components/import/DataImportSections'
+
+type ImportTab = 'pdf' | 'wrong' | 'words'
 
 const PROGRESS_STORAGE_KEY = 'drillly-import-progress-v1'
 
@@ -24,6 +30,7 @@ type ImportProgress = {
 }
 
 export function ImportPage() {
+  const [importTab, setImportTab] = useState<ImportTab>('pdf')
   const [providers, setProviders] = useState<
     { id: string; label: string; model: string; available?: boolean }[]
   >([])
@@ -70,6 +77,13 @@ export function ImportPage() {
       )
     } catch {
       /* ignore quota */
+    }
+  }, [])
+
+  useEffect(() => {
+    const hash = window.location.hash.replace('#', '') as ImportTab
+    if (hash === 'pdf' || hash === 'wrong' || hash === 'words') {
+      setImportTab(hash)
     }
   }, [])
 
@@ -471,7 +485,52 @@ export function ImportPage() {
   return (
     <div className="import-page">
       <h2>{t.title}</h2>
+      <p className="import-page-lead">
+        统一从此处导入：PDF 做题题、Study 错题截图、默写单词（含英文词汇 PDF 提取）。
+      </p>
 
+      <nav className="import-tabs" aria-label="导入类型">
+        <button
+          type="button"
+          className={importTab === 'pdf' ? 'import-tab active' : 'import-tab'}
+          onClick={() => setImportTab('pdf')}
+        >
+          {t.tabPdf}
+        </button>
+        <button
+          type="button"
+          className={importTab === 'wrong' ? 'import-tab active' : 'import-tab'}
+          onClick={() => setImportTab('wrong')}
+        >
+          {t.tabWrong}
+        </button>
+        <button
+          type="button"
+          className={importTab === 'words' ? 'import-tab active' : 'import-tab'}
+          onClick={() => setImportTab('words')}
+        >
+          {t.tabWords}
+        </button>
+      </nav>
+
+      {importTab === 'wrong' && (
+        <div className="card">
+          <WrongDataImportSection />
+        </div>
+      )}
+
+      {importTab === 'words' && (
+        <div className="card">
+          <WordDataImportSection
+            providers={providers}
+            provider={provider}
+            onProviderChange={setProvider}
+          />
+        </div>
+      )}
+
+      {importTab === 'pdf' && (
+        <>
       <div className="card">
         <h3>{t.parseSettingsTitle}</h3>
         <p style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>{t.parseSettingsNote}</p>
@@ -649,6 +708,8 @@ export function ImportPage() {
           <h3>{t.previewJson}</h3>
           <pre style={{ overflow: 'auto', maxHeight: 360, fontSize: 12 }}>{preview}</pre>
         </div>
+      )}
+        </>
       )}
     </div>
   )

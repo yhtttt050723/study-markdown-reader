@@ -1,6 +1,9 @@
 // UI strings for PDF import page
 export const importZh = {
-  title: 'PDF 导入',
+  title: '导入题目数据',
+  tabPdf: 'PDF 题目',
+  tabWrong: '错题截图',
+  tabWords: '默写单词',
   parseSettingsTitle: '解析设置（收件箱一键处理 & 单文件上传共用）',
   parseSettingsNote:
     '「每批页数」= 每次发给 AI 的连续页数。王道/扫描版做题本请选「通义千问」+ 每批 1 页（无文字层时会自动用视觉模型看图识题）。大题会导入为「主观题」。',

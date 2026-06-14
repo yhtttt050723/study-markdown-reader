@@ -16,6 +16,14 @@ from app.services.import_job import clear_job, get_job_state
 from app.services.inbox_reset import reset_inbox_pdf
 from app.services.import_batch_failures import count_pending_by_file, list_all_pending
 from app.services.import_job import finish_job, start_job
+from app.services.english_pdf_import import import_english_pdf, preview_english_pdf
+from app.services.english_vocab_inbox import (
+    list_english_vocab_inbox,
+    process_all_english_vocab_inbox,
+    process_one_english_vocab_pdf,
+    reset_english_vocab_inbox_file,
+)
+from app.services.settings_store import get_english_vocab_inbox_dir
 from app.services.pdf_inbox import (
     ImportCancelledError,
     _mirror_event_to_job,
@@ -47,6 +55,21 @@ class InboxFileBody(BaseModel):
 
 class InboxProcessOneBody(InboxProcessBody):
     filename: str
+
+
+class EnglishVocabInboxProcessBody(BaseModel):
+    provider: str = "deepseek"
+    model: str | None = None
+    pages_per_batch: int = 3
+    skip_imported: bool = True
+    default_book: str = ""
+
+
+class EnglishVocabInboxOneBody(EnglishVocabInboxProcessBody):
+    filename: str
+    book: str = ""
+    unit: str = ""
+    force: bool = False
 
 
 @router.get("/providers/", response_model=list[ProviderOut])
@@ -115,6 +138,125 @@ async def upload_pdf(
 
     db.commit()
     return {"task_id": task.id, "batches": len(chunk_list)}
+
+
+@router.post("/english-pdf-words/")
+async def upload_english_pdf_words(
+    file: UploadFile = File(...),
+    auto_import: bool = Form(True),
+    provider: str = Form("deepseek"),
+    model: str = Form(""),
+    pages_per_batch: int = Form(3),
+    unit: str = Form(""),
+    book: str = Form(""),
+    tag_group: str = Form("英语"),
+    source_label: str = Form(""),
+    allow_reimport: bool = Form(False),
+    replace_pdf_source: bool = Form(False),
+    db: Session = Depends(get_db),
+):
+    """上传英文词汇 PDF → AI（默认 DeepSeek）按批解析 → 写入默写词库。"""
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(400, "仅支持 PDF")
+    content = await file.read()
+    try:
+        return await import_english_pdf(
+            db,
+            content,
+            filename=file.filename or "",
+            provider=provider.strip() or "deepseek",
+            model=model.strip() or None,
+            pages_per_batch=max(1, min(10, pages_per_batch)),
+            unit=unit.strip(),
+            book=book.strip(),
+            tag_group=tag_group.strip(),
+            source_label=source_label.strip() or (file.filename or ""),
+            auto_import=auto_import,
+            allow_reimport=allow_reimport,
+            replace_pdf_source=replace_pdf_source,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@router.get("/english-vocab-inbox/")
+async def get_english_vocab_inbox(db: Session = Depends(get_db)):
+    return {
+        "inbox_dir": str(get_english_vocab_inbox_dir()),
+        "files": list_english_vocab_inbox(db),
+        "naming_hint": "文件名请含「基础词」或「必考词」+ Unit 编号，如：基础词 Unit15.pdf",
+    }
+
+
+@router.post("/english-vocab-inbox/process-all/")
+async def english_vocab_inbox_process_all(
+    body: EnglishVocabInboxProcessBody, db: Session = Depends(get_db)
+):
+    try:
+        return await process_all_english_vocab_inbox(
+            db,
+            provider=body.provider.strip() or "deepseek",
+            model=body.model.strip() if body.model else None,
+            pages_per_batch=body.pages_per_batch,
+            skip_imported=body.skip_imported,
+            default_book=body.default_book.strip(),
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@router.post("/english-vocab-inbox/process-one/")
+async def english_vocab_inbox_process_one(
+    body: EnglishVocabInboxOneBody, db: Session = Depends(get_db)
+):
+    try:
+        return await process_one_english_vocab_pdf(
+            db,
+            body.filename,
+            provider=body.provider.strip() or "deepseek",
+            model=body.model.strip() if body.model else None,
+            pages_per_batch=body.pages_per_batch,
+            book=body.book.strip(),
+            unit=body.unit.strip(),
+            force=body.force,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@router.post("/english-vocab-inbox/reset/")
+def english_vocab_inbox_reset(body: InboxFileBody):
+    try:
+        return reset_english_vocab_inbox_file(body.filename)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e)) from e
+
+
+@router.post("/english-pdf-words/preview/")
+async def preview_english_pdf_words(
+    file: UploadFile = File(...),
+    provider: str = Form("deepseek"),
+    model: str = Form(""),
+    pages_per_batch: int = Form(3),
+    unit: str = Form(""),
+):
+    """预览：仅解析第一批 PDF 页，不入库。"""
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(400, "仅支持 PDF")
+    content = await file.read()
+    try:
+        return await preview_english_pdf(
+            content,
+            filename=file.filename or "",
+            provider=provider.strip() or "deepseek",
+            model=model.strip() or None,
+            pages_per_batch=max(1, min(10, pages_per_batch)),
+            unit=unit.strip(),
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
 
 
 def _task_detail(db: Session, task_id: int) -> PdfImportTask:

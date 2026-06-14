@@ -50,7 +50,7 @@ def question_to_md(q: Question, include_answers: bool, submissions: list[Submiss
             lines.append(f"### {ts} · {'正确' if s.is_correct else '错误'} · 得分 {s.score}")
             if q.type == "coding":
                 code = s.answer.get("code") or s.answer.get("value") or ""
-                lang = s.answer.get("language", "python")
+                lang = s.answer.get("language", "cpp")
                 lines.append(f"```{lang}")
                 lines.append(code)
                 lines.append("```")

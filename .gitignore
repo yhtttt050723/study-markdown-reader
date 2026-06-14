@@ -2,6 +2,9 @@
 /drillly/
 /video-dash/
 
+# 本地电子书（体积过大，不入库）
+电子书/
+
 # 依赖与构建
 node_modules/
 **/node_modules/
@@ -20,8 +23,11 @@ study-suite.resolved.json
 .env.*
 *.local
 
-# Cursor（规范 .mdc 仅本地，不上传远端）
-.cursor/
+# Cursor（规范 .mdc 仅本地；skills 入库）
+.cursor/*
+!.cursor/skills/
+!.cursor/skills/**
+!.cursor/nightly-git-log.md
 
 # Logs
 logs

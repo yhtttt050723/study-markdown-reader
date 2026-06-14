@@ -6,16 +6,19 @@ from app.database import get_db
 from app.models import Question, Submission
 from app.schemas.api_models import (
     PracticeProgressBody,
+    PracticeProgressUpdateOut,
     PracticeStateOut,
     QuestionOut,
+    SubmitAnswerOut,
     SubmitBody,
     SubmissionOut,
     TagOut,
 )
 from app.services.grading import grade_answer
 from app.services.markdown_export import build_export
-from app.services.practice_progress import set_round_done
+from app.services.practice_progress import set_round_done, upsert_round_done
 from app.services.question_query import (
+    count_questions,
     list_pdf_sources,
     load_questions,
     progress_map,
@@ -86,7 +89,76 @@ def get_progress_summary(
     return progress_summary(db, source_pdf=source_pdf)
 
 
-@router.get("/questions/", response_model=list[QuestionOut])
+@router.get("/session-stats/")
+def get_session_stats_api(
+    db: Session = Depends(get_db),
+    start: str = Query(..., description="开始时间 CST，如 2026-06-09T22:10 或 2026-06-09 22:10"),
+    end: str = Query(..., description="结束时间 CST"),
+    slot: str | None = Query(None, description="可选：HH:MM—HH:MM，与 date 联用"),
+    date: str | None = Query(None, description="时段起始日期 YYYY-MM-DD"),
+    end_date: str | None = Query(None, description="跨日结束日期"),
+    source_pdf: str | None = None,
+    format: str = Query("json", pattern="^(json|md)$"),
+):
+    from app.services.session_stats import (
+        format_stats_markdown,
+        get_session_stats,
+        parse_cst_datetime,
+        parse_slot_range,
+    )
+
+    try:
+        if slot:
+            if not date:
+                raise HTTPException(400, "slot 需要 date 参数")
+            s, e = parse_slot_range(slot, date=date, end_date=end_date)
+        else:
+            s = parse_cst_datetime(start)
+            e = parse_cst_datetime(end)
+        stats = get_session_stats(db, start=s, end=e, source_pdf=source_pdf)
+    except ValueError as ex:
+        raise HTTPException(400, str(ex)) from ex
+
+    if format == "md":
+        from fastapi.responses import PlainTextResponse
+
+        return PlainTextResponse(format_stats_markdown(stats), media_type="text/markdown; charset=utf-8")
+    return stats
+
+
+@router.get("/wrong-board/")
+def get_wrong_board(
+    db: Session = Depends(get_db),
+    days: int = Query(1, ge=1, le=30),
+    source_pdf: str | None = None,
+    tags: str | None = None,
+    limit: int = Query(200, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    from app.services.practice_wrong_board import get_wrong_board as load_wrong_board
+
+    return load_wrong_board(
+        db,
+        days=days,
+        source_pdf=source_pdf,
+        tags=tags,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/daily-stats/")
+def get_daily_practice_stats(
+    db: Session = Depends(get_db),
+    days: int = Query(14, ge=1, le=90),
+    source_pdf: str | None = None,
+):
+    from app.services.daily_practice_stats import get_daily_stats
+
+    return get_daily_stats(db, days=days, source_pdf=source_pdf or None)
+
+
+@router.get("/questions/")
 def list_practice_questions(
     db: Session = Depends(get_db),
     tags: str | None = None,
@@ -96,9 +168,13 @@ def list_practice_questions(
     search: str | None = Query(None, max_length=200, description="题干/选项部分文字"),
     practice_round: int | None = Query(None, ge=1, le=2),
     round_status: str | None = Query(None, pattern="^(pending|done)$"),
+    self_mark_status: str | None = Query(
+        None, pattern="^(correct|wrong|unmarked)$", description="刷错题自评筛选"
+    ),
     order: str = Query("id", pattern="^(id|random)$"),
-    limit: int = Query(500, le=500),
+    limit: int = Query(50, ge=1, le=500),
     offset: int = 0,
+    page: bool = Query(False, description="为 true 时返回 {items,total,limit,offset}"),
 ):
     rows = load_questions(
         db,
@@ -109,12 +185,32 @@ def list_practice_questions(
         search=search,
         practice_round=practice_round,
         round_status=round_status,
+        self_mark_status=self_mark_status,
         order=order,
         limit=limit,
-        offset=offset,
+        offset=max(offset, 0),
     )
     pmap = progress_map(db, [r.id for r in rows])
-    return [_question_to_out(r, pmap.get(r.id, {})) for r in rows]
+    items = [_question_to_out(r, pmap.get(r.id, {})) for r in rows]
+    if page:
+        total = count_questions(
+            db,
+            tags=tags,
+            category=category,
+            q_type=type,
+            source_pdf=source_pdf,
+            search=search,
+            practice_round=practice_round,
+            round_status=round_status,
+            self_mark_status=self_mark_status,
+        )
+        return {
+            "items": items,
+            "total": total,
+            "limit": limit,
+            "offset": max(offset, 0),
+        }
+    return items
 
 
 @router.post("/progress/{question_id}/")
@@ -128,11 +224,20 @@ def update_progress(
     q = db.query(Question).filter(Question.id == question_id).first()
     if not q:
         raise HTTPException(404, "题目不存在")
-    row = set_round_done(db, question_id, body.round, body.done)
-    return {"ok": True, "question_id": question_id, "round": row.round, "done": row.done}
+    set_round_done(db, question_id, body.round, body.done)
+    pmap = progress_map(db, [question_id])
+    prog = pmap.get(question_id, {"round1": False, "round2": False})
+    return PracticeProgressUpdateOut(
+        question_id=question_id,
+        practice=PracticeStateOut(
+            round1=prog["round1"],
+            round2=prog["round2"],
+            source_pdf=source_pdf_from_content(q.content) if q else "",
+        ),
+    )
 
 
-@router.post("/submit/", response_model=SubmissionOut)
+@router.post("/submit/", response_model=SubmitAnswerOut)
 def submit_answer(body: SubmitBody, db: Session = Depends(get_db)):
     q = db.query(Question).filter(Question.id == body.question_id).first()
     if not q:
@@ -155,13 +260,29 @@ def submit_answer(body: SubmitBody, db: Session = Depends(get_db)):
         duration_ms=body.duration_ms,
     )
     db.add(sub)
+
+    if q.type == "word_dictation":
+        from app.services.word_wrong import handle_word_submission
+
+        handle_word_submission(db, q, answer, is_correct=ok)
+
+    # 仅做对时自动记入一刷/二刷完成；做错只留提交记录，题目不从「未完成」列表消失
+    if body.practice_round in (1, 2) and ok:
+        upsert_round_done(db, q.id, body.practice_round, True)
+
     db.commit()
     db.refresh(sub)
 
-    if body.practice_round in (1, 2):
-        set_round_done(db, q.id, body.practice_round, True)
-
-    return sub
+    pmap = progress_map(db, [q.id])
+    prog = pmap.get(q.id, {"round1": False, "round2": False})
+    return SubmitAnswerOut(
+        submission=SubmissionOut.model_validate(sub),
+        practice=PracticeStateOut(
+            round1=prog["round1"],
+            round2=prog["round2"],
+            source_pdf=source_pdf_from_content(q.content),
+        ),
+    )
 
 
 @router.get("/submissions/", response_model=list[SubmissionOut])

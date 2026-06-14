@@ -1,6 +1,6 @@
 # 学习进度
 
-本文件由 Study Markdown Reader 维护。下方以 `smr-progress` 标记的 JSON 代码块与顶栏「学习进度」看板一致；进度字段与 `科目目录/Math.mdc`、`科目目录/408.mdc` 中章节对应（basicThrough / strengthenThrough / through 表示已过章节数）。**《660》**：每科可选 **book660Through**（已做题数）、**book660Total**（本分册总题数，高数默认 360；线代/概率填 0 则看板不显示该科 660 条）、**book660Caption**（看板说明，可选）。可直接改 JSON 后 **Ctrl+S** 保存，再点「刷新 UI」或重新打开看板即可同步。
+本文件由 Study Markdown Reader 维护。下方以 `smr-progress` 标记的 JSON 代码块与顶栏「学习进度」看板一致；进度字段与 `科目目录/Math.mdc`、`科目目录/408.mdc` 中章节对应（basicThrough / strengthenThrough / through 表示已过章节数）。**《660》**：每科可选 **book660Through**、**book660Total**、**book660Caption**。**《张宇1000题》**：**book1000BasicThrough** / **book1000StrengthenThrough**（与 Math.mdc「张宇1000」分篇章节对齐）、**book1000Caption**；综合篇见根级 **zhangyu1000.comprehensiveThrough**（测试卷 0–4）。可直接改 JSON 后 **Ctrl+S** 保存，再点「刷新 UI」或重新打开看板即可同步。
 
 ```smr-progress
 {
@@ -9,22 +9,31 @@
       "basicThrough": 12,
       "strengthenThrough": 12,
       "book660Total": 360,
-      "book660Through": 80,
-      "book660Caption": "已过至：第六章 定积分应用（第 80 题）"
+      "book660Through": 188,
+      "book660Caption": "已过至：第六章 定积分应用（第 80 题）",
+      "book1000BasicThrough": 6,
+      "book1000StrengthenThrough": 0,
+      "book1000Caption": ""
     },
     "线代": {
       "basicThrough": 4,
       "strengthenThrough": 3,
       "book660Total": 0,
       "book660Through": 0,
-      "book660Caption": ""
+      "book660Caption": "",
+      "book1000BasicThrough": 2,
+      "book1000StrengthenThrough": 0,
+      "book1000Caption": ""
     },
     "概率论": {
-      "basicThrough": 3,
+      "basicThrough": 8,
       "strengthenThrough": 2,
       "book660Total": 0,
       "book660Through": 0,
-      "book660Caption": ""
+      "book660Caption": "",
+      "book1000BasicThrough": 1,
+      "book1000StrengthenThrough": 0,
+      "book1000Caption": ""
     }
   },
   "math2": {
@@ -33,22 +42,28 @@
       "strengthenThrough": 12,
       "book660Total": 360,
       "book660Through": 80,
-      "book660Caption": "已过至：第六章 定积分应用（第 80 题）"
+      "book660Caption": "已过至：第六章 定积分应用（第 80 题）",
+      "book1000BasicThrough": 5,
+      "book1000StrengthenThrough": 0,
+      "book1000Caption": ""
     },
     "线代": {
       "basicThrough": 4,
       "strengthenThrough": 3,
       "book660Total": 0,
       "book660Through": 0,
-      "book660Caption": ""
+      "book660Caption": "",
+      "book1000BasicThrough": 2,
+      "book1000StrengthenThrough": 0,
+      "book1000Caption": ""
     }
   },
   "cs408": {
     "数据结构": {
-      "through": 7
+      "through": 8
     },
     "机组": {
-      "through": 6
+      "through": 7
     },
     "计网": {
       "through": 6
@@ -57,13 +72,17 @@
       "through": 5
     }
   },
+  "zhangyu1000": {
+    "comprehensiveThrough": 0,
+    "comprehensiveTotal": 4
+  },
   "english": {
     "mustWords": {
       "round1Unit": 26,
       "round2Unit": 0
     },
     "basicWords": {
-      "round1Unit": 14,
+      "round1Unit": 24,
       "round2Unit": 0
     }
   }

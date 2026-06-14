@@ -1,0 +1,19 @@
+{
+  "date": "2026-06-08",
+  "subject": "概率论",
+  "segment": "段#3",
+  "renames": [
+    { "from": "屏幕截图 2026-06-08 205506.png", "to": "660_532.png", "book": "660Ch3", "question": "T532" },
+    { "from": "屏幕截图 2026-06-08 205518.png", "to": "660_533.png", "book": "660Ch3", "question": "T533" },
+    { "from": "屏幕截图 2026-06-08 205530.png", "to": "660_537.png", "book": "660Ch3", "question": "T537" },
+    { "from": "屏幕截图 2026-06-08 205541.png", "to": "660_539.png", "book": "660Ch3", "question": "T539" },
+    { "from": "屏幕截图 2026-06-08 205611.png", "to": "660_606.png", "book": "660Ch3", "question": "T606" },
+    { "from": "屏幕截图 2026-06-08 205620.png", "to": "660_608.png", "book": "660Ch3", "question": "T608" },
+    { "from": "屏幕截图 2026-06-08 205629.png", "to": "660_609.png", "book": "660Ch3", "question": "T609" },
+    { "from": "屏幕截图 2026-06-08 205637.png", "to": "660_611.png", "book": "660Ch3", "question": "T611" },
+    { "from": "屏幕截图 2026-06-08 212449.png", "to": "zy1000_prob_b2_04.png", "book": "1000Ch2", "question": "T4" },
+    { "from": "屏幕截图 2026-06-08 212458.png", "to": "zy1000_prob_b2_05.png", "book": "1000Ch2", "question": "T5" },
+    { "from": "屏幕截图 2026-06-08 212508.png", "to": "zy1000_prob_b2_09.png", "book": "1000Ch2", "question": "T9" },
+    { "from": "屏幕截图 2026-06-08 212523.png", "to": "zy1000_prob_b2_11.png", "book": "1000Ch2", "question": "T11" }
+  ]
+}

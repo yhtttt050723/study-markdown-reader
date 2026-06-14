@@ -133,6 +133,27 @@ def get_question(qid: int, db: Session = Depends(get_db)):
     return _load_question(db, qid)
 
 
+@router.post("/{qid}/convert-to-coding/", response_model=QuestionOut)
+def convert_question_to_coding(qid: int, db: Session = Depends(get_db)):
+    """将选择题/主观题一键转为代码题，保留题干与解析，并初始化测试数据槽位。"""
+    q = _load_question(db, qid)
+    if q.type in ("word_dictation", "wrong_review", "coding"):
+        raise HTTPException(400, f"题型 {q.type} 不支持转为代码题")
+
+    content = dict(q.content or {})
+    content["type"] = "coding"
+    content.pop("options", None)
+    content.setdefault("language", "cpp")
+    content.setdefault("starterCode", "")
+    if not isinstance(content.get("testCases"), list):
+        content["testCases"] = []
+    content["answer"] = []
+    q.type = "coding"
+    q.content = content
+    db.commit()
+    return _load_question(db, qid)
+
+
 @router.patch("/{qid}/", response_model=QuestionOut)
 def patch_question(qid: int, body: QuestionPatch, db: Session = Depends(get_db)):
     q = _load_question(db, qid)

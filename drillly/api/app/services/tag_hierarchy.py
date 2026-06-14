@@ -10,6 +10,7 @@ from app.models import Tag
 
 TAG_SEP = "/"
 MAX_CHILD_TAGS = 3
+WORD_DICTATION_PARENT = "默写单词"
 
 
 def is_group_name(name: str) -> bool:

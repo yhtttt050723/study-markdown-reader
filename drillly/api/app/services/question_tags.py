@@ -66,4 +66,5 @@ def tag_ids_for_question(
 
 def attach_tags(db: Session, question: Question, tag_ids: list[int]) -> None:
     if tag_ids:
-        question.tags = db.query(Tag).filter(Tag.id.in_(tag_ids)).all()
+        unique_ids = list(dict.fromkeys(tag_ids))
+        question.tags = db.query(Tag).filter(Tag.id.in_(unique_ids)).all()
