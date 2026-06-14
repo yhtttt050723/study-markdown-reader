@@ -43,6 +43,7 @@ description: >-
 - 提交信息：`chore: nightly sync YYYY-MM-DD`（可加一行简述主要目录）
 - **禁止**：`git push --force`、改 `git config`、提交 `.env` / `api/data/` / `node_modules`
 - `drillly` / `video-dash` 各自仓库内已有 `.gitignore`
+- `Study` 仓库 **不要** 提交 `电子书/`（>100MB PDF 会被 GitHub 拒绝）；已写入 `.gitignore`
 
 ### 身份未配置时
 
